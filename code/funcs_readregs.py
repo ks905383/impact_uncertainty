@@ -16,7 +16,280 @@ from funcs_support import get_filepaths,get_params,utility_save
 dir_list = get_params()
 
 
-def coeffs_gdppc(obstreat='sep'):
+def coeffs_gdppc(obstreat='sep',resolution='025deg',timeframe='1980-2010',return_raw = False):
+    # Get relevant filenames
+    fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'gdppc/reg*.csv'))})
+    # Extract properties
+    fns['datatype'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[1])[0] for fn in fns.path.values]
+    fns['resolution'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[3])[0] for fn in fns.path.values]
+    fns['proj_base'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[4])[0] for fn in fns.path.values]
+    fns['timeframe'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[5])[0] for fn in fns.path.values]
+    fns['obstreat'] = ['joint' if re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[-1])[0]=='JOINT' else 'sep' for fn in fns.path.values]
+    
+    fns = fns.set_index(['proj_base','resolution','timeframe','obstreat','datatype'])
+    fns = fns.sort_index()
+    
+    # Load data 
+    coeffs =[]
+    vcvs = []
+    
+    for row in fns.iterrows():
+        df_tmp = pd.read_csv(row[1]['path'])
+        df_tmp.columns = ['tassumpoly_1','tassumpoly_2']
+        if row[0][-1] == 'coeffs':
+            df_tmp.index = [row[0][0]]
+            ds_tmp = df_tmp.to_xarray().rename({'index':'proj_base'}).to_dataarray(dim='pred',name='coeffs')
+            ds_tmp = ds_tmp.expand_dims({v:[val] for v,val in zip(['resolution','timeframe','obstreat'],
+                                                         row[0][1:4])})
+            
+            coeffs.append(ds_tmp)
+        elif row[0][-1] == 'vcv':
+            df_tmp.index = ['tassumpoly_1','tassumpoly_2']
+            ds_tmp = df_tmp.to_xarray().rename({'index':'pred_1'}).to_dataarray(dim='pred_2',name='vcv')
+            ds_tmp = ds_tmp.expand_dims({v:[val] for v,val in zip(['proj_base','resolution','timeframe','obstreat'],
+                                                         row[0][0:4])})
+            vcvs.append(ds_tmp)
+        else:
+            print(f'{row[0][-1]} is not one of coeffs, vcv, do not know how to deal, skipped.')
+    
+    coeffs = xr.merge(coeffs,join='outer',compat='no_conflicts')
+    vcvs = xr.merge(vcvs,join='outer',compat='no_conflicts')
+    
+    # Turn ERA5-025 into ERA5
+    coeffs['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in coeffs.proj_base.values]
+    if 'proj_base_1' in vcvs.sizes:
+        for k in [1,2]:
+            vcvs[f'proj_base_{str(k)}'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv[f'proj_base_{str(k)}'].values]
+    else:
+        vcvs['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcvs.proj_base.values]
+
+    
+
+    if return_raw:
+        return coeffs,vcvs
+    else:
+        coeffs = coeffs.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe)
+        vcvs = vcvs.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe)
+    return coeffs,vcvs
+
+
+def coeffs_mortality(obstreat='sep',resolution='025deg',timeframe='1980-2010',spec='pooled',indflag='noInd',
+                     return_raw = False):    
+    # Get relevant filenames
+    fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'mortality/reg*.csv'))})
+    
+    # Extract properties
+    fns['datatype'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[1])[0] for fn in fns.path.values]
+    fns['spec'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[3])[0] for fn in fns.path.values]
+    fns['resolution'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[4])[0] for fn in fns.path.values]
+    fns['proj_base'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[5])[0] for fn in fns.path.values]
+    fns['timeframe'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[6])[0] for fn in fns.path.values]
+    fns['obstreat'] = [re.split(r'\_',re.search(r'\_JOINT.*[\.\_]',fn).group()[1:-1].lower())[0] if 'JOINT' in fn else 'sep' for fn in fns.path.values]
+    fns['indflag'] = ['noInd' if 'noIND' in fn else 'wInd' for fn in fns.path.values]
+    
+    fns = fns.set_index(['proj_base','resolution','timeframe','obstreat','spec','indflag','datatype'])
+    fns = fns.sort_index()
+
+    
+    pred_names = [f'tassumpoly_{str(k)}' for k in np.arange(1,5)]
+    
+    # Load data 
+    coeffs =[]
+    vcvs = []
+    
+    for row in fns.iterrows():
+        df_tmp = pd.read_csv(row[1]['path'])
+        df_tmp.columns = pred_names
+        if row[0][-1] == 'coeffs':
+            # Get names and positions of metadata dimensions
+            dim_names = [idx for idx in fns.index.names if idx not in ['proj_base','datatype']]
+            dim_idxs = [fns.index.names.index(idx) for idx in dim_names]
+    
+            df_tmp.index = [row[0][0]]
+            ds_tmp = df_tmp.to_xarray().rename({'index':'proj_base'}).to_dataarray(dim='pred',name='coeffs')
+            ds_tmp = ds_tmp.expand_dims({v:[val] for v,val in zip(dim_names,
+                                                                 np.array(row[0])[dim_idxs])})
+            
+            coeffs.append(ds_tmp)
+        elif row[0][-1] == 'vcv':
+            # Get names and positions of metadata dimensions
+            dim_names = [idx for idx in fns.index.names if idx not in ['datatype']]
+            dim_idxs = [fns.index.names.index(idx) for idx in dim_names]
+            
+            df_tmp.index = pred_names
+            ds_tmp = df_tmp.to_xarray().rename({'index':'pred_1'}).to_dataarray(dim='pred_2',name='vcv')
+            ds_tmp = ds_tmp.expand_dims({v:[val] for v,val in zip(dim_names,np.array(row[0])[dim_idxs])})
+            vcvs.append(ds_tmp)
+        else:
+            print(f'{row[0][-1]} is not one of coeffs, vcv, do not know how to deal, skipped.')
+    
+    
+    coeffs = xr.merge(coeffs,join='outer',compat='no_conflicts')
+    vcvs = xr.merge(vcvs,join='outer',compat='no_conflicts')
+    
+    # Turn ERA5-025 into ERA5
+    coeffs['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in coeffs.proj_base.values]
+    if 'proj_base_1' in vcvs.sizes:
+        for k in [1,2]:
+            vcvs[f'proj_base_{str(k)}'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv[f'proj_base_{str(k)}'].values]
+    else:
+        vcvs['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcvs.proj_base.values]
+
+    if return_raw:
+        return coeffs,vcvs
+    else:
+        coeffs = coeffs.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,spec=spec,indflag=indflag)
+        vcvs = vcvs.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,spec=spec,indflag=indflag)
+        return coeffs,vcvs
+
+
+def coeffs_payroll(obstreat='sep',resolution='025deg',timeframe='1986-2011',weighting='pop',
+                   joint_type = 'sep',
+                     return_raw = False):
+    repl_mods = {'ERA5_025':'ERA5',
+                 'JRA_3Q':'JRA-3Q'}
+    
+    fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'payroll/*.csv'))})
+    
+    fns['datatype'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[1])[0] for fn in fns.path.values]
+    fns['weighting'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[4])[0] for fn in fns.path.values]
+    fns['resolution'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[3])[0] for fn in fns.path.values]
+    fns['proj_base'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[5])[0] for fn in fns.path.values]
+    fns['timeframe'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[6])[0] for fn in fns.path.values]
+    fns['obstreat'] = [re.split(r'\_',re.search(r'\_JOINT.*[\.\_]',fn).group()[1:-1].lower())[0] if 'JOINT' in fn else 'sep' for fn in fns.path.values]
+    
+    
+    fns = fns.set_index(['proj_base','resolution','timeframe','obstreat','weighting','datatype'])
+    fns = fns.sort_index()
+    
+    coeffs = []
+    coeffs_all = []
+    vcvs = []
+    vcvs_all = []
+    
+    for row in fns.iterrows():
+        if row[0][-1] == 'coeffs':
+            if row[0][0] == 'ALLREA':
+                df_tmp = pd.read_csv(row[1]['path'])
+                
+                for obs_mod,rn in repl_mods.items():
+                    df_tmp.columns = [re.sub(obs_mod,rn,colname) for colname in df_tmp]
+                
+                df_tmp.columns = pd.MultiIndex.from_tuples([(re.split(r'\_',colname)[0],'_'.join(re.split(r'\_',colname)[1:None])) 
+                                                            for colname in df_tmp.columns],
+                                         names = ['proj_base','pred'])
+                
+                ds_tmp = df_tmp.melt(value_name='coeffs').set_index(['proj_base','pred']).to_xarray()
+                
+                # Get names and positions of metadata dimensions
+                dim_names = [idx for idx in fns.index.names if idx not in ['proj_base','datatype']]
+                dim_idxs = [fns.index.names.index(idx) for idx in dim_names]
+            else:
+                df_tmp = pd.read_csv(row[1]['path'])
+                ds_tmp = df_tmp.melt(value_name='coeffs').rename({'variable':'pred'},axis=1).set_index(['pred']).to_xarray()
+                
+                # Get names and positions of metadata dimensions
+                dim_names = [idx for idx in fns.index.names if idx not in ['datatype']]
+                dim_idxs = [fns.index.names.index(idx) for idx in dim_names]
+            
+            
+            # Put in format that can be propagated easily, 
+            # across all temperature bins above 90 degrees            
+            #bin_names = [f'tasmaxbinF_{str(bin)}' for bin in np.arange(92.5,127.6,5)]
+            
+            ds_tmp = ds_tmp.sel(pred = ['days90plus'])#.expand_dims({'pred':bin_names})
+            
+            ds_tmp = ds_tmp.expand_dims({v:[val] for v,val in zip(dim_names,
+                                          np.array(row[0])[dim_idxs])})
+
+            ds_tmp['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in ds_tmp.proj_base.values]
+    
+            if row[0][0] == 'ALLREA':
+                coeffs_all.append(ds_tmp)
+            else:
+                coeffs.append(ds_tmp)
+        elif row[0][-1] == 'vcv':
+            df_tmp = pd.read_csv(row[1]['path'])
+            if row[0][0] == 'ALLREA':
+    
+                for obs_mod,rn in repl_mods.items():
+                    df_tmp.columns = [re.sub(obs_mod,rn,colname) for colname in df_tmp]
+                
+                colnames = df_tmp.columns.copy()
+                df_tmp.columns = pd.MultiIndex.from_tuples([(re.split(r'\_',colname)[0],'_'.join(re.split(r'\_',colname)[1:None])) 
+                                                            for colname in colnames],
+                                         names = ['proj_base_1','pred_1'])
+                df_tmp.index = pd.MultiIndex.from_tuples([(re.split(r'\_',colname)[0],'_'.join(re.split(r'\_',colname)[1:None])) 
+                                                          for colname in colnames],
+                                         names = ['proj_base_2','pred_2'])
+                
+                ds_tmp = (df_tmp.melt(ignore_index=False).rename({'value':'vcv'},axis=1).reset_index().
+                 set_index(['proj_base_1','pred_1','proj_base_2','pred_2']).sort_index()).to_xarray()
+                
+    
+                # Get names and positions of metadata dimensions
+                dim_names = [idx for idx in fns.index.names if idx not in ['proj_base','datatype']]
+                dim_idxs = [fns.index.names.index(idx) for idx in dim_names]
+            
+            else:
+                df_tmp.index = df_tmp.columns.copy()
+                df_tmp.index.name = 'pred_2'
+                df_tmp.columns.name = 'pred_1'
+                
+                ds_tmp = (df_tmp.melt(ignore_index=False).reset_index().
+                          set_index(['pred_1','pred_2']).to_xarray().rename({'value':'vcv'}))
+    
+                # Get names and positions of metadata dimensions
+                dim_names = [idx for idx in fns.index.names if idx not in ['datatype']]
+                dim_idxs = [fns.index.names.index(idx) for idx in dim_names]
+
+    
+            # Get just hte value for days > 90
+            ds_tmp = ds_tmp.sel(pred_1 = ['days90plus'],
+                                    pred_2 = ['days90plus'])
+            
+            # Add metadata dimensions
+            ds_tmp = ds_tmp.expand_dims({v:[val] for v,val in zip(dim_names,
+                                      np.array(row[0])[dim_idxs])})
+            if 'proj_base_1' in ds_tmp.sizes:
+                ds_tmp['proj_base_1'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in ds_tmp.proj_base_1.values]
+                ds_tmp['proj_base_2'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in ds_tmp.proj_base_2.values]
+            else:
+                ds_tmp['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in ds_tmp.proj_base.values]
+
+
+            
+            if row[0][0] == 'ALLREA':
+                vcvs_all.append(ds_tmp)
+            else:
+                vcvs.append(ds_tmp)
+        
+    coeffs = xr.merge(coeffs,join='outer',compat='no_conflicts')
+    coeffs_all = xr.merge(coeffs_all,join='outer',compat='no_conflicts')
+    vcvs = xr.merge(vcvs,join='outer',compat='no_conflicts')
+    vcvs_all = xr.merge(vcvs_all,join='outer',compat='no_conflicts')
+    
+
+    if joint_type == 'sep':
+        if return_raw:
+            return coeffs,vcvs
+        else:
+            coeffs = coeffs.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,weighting=weighting)
+            vcvs = vcvs.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,weighting=weighting)
+            return coeffs,vcvs
+    else:
+        if return_raw:
+            return coeffs_all,vcvs_all
+        else:
+            coeffs_all = coeffs_all.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,weighting=weighting)
+            vcvs_all = vcvs_all.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,weighting=weighting)
+            return coeffs,vcvs
+
+
+
+
+
+def coeffs_gdppc_old(obstreat='sep'):
 
     fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'gdppc/*.csv'))})
     fns['proj_base'] = [re.split('post1980',re.split(r'\.csv',re.split('allyears',re.split(r'\_',re.split(r'\/',fn)[-1])[-1])[0])[0])[0] for fn in fns.path.values]
@@ -24,7 +297,7 @@ def coeffs_gdppc(obstreat='sep'):
     fns['datatype'] = [re.split(r'\_',re.split(r'\/estimated',fn)[-1])[0] for fn in fns.path.values]
     fns = fns.set_index(['proj_base','datatype','timeframe'])
     
-    def get_coeffs_gdppc(output,obstreat,fns=fns):
+    def get_coeffs_gdppc_old(output,obstreat,fns=fns):
         ''' Reading Burke, Hsiang, and Miguel regression output
     
         Parameters
@@ -98,7 +371,7 @@ def coeffs_gdppc(obstreat='sep'):
     
         return dss
 
-    coeffs,vcv = get_coeffs_gdppc('coeffs',obstreat),get_coeffs_gdppc('vcv',obstreat)
+    coeffs,vcv = get_coeffs_gdppc_old('coeffs',obstreat),get_coeffs_gdppc_old('vcv',obstreat)
 
     # Turn ERA5-025 into ERA5
     coeffs['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in coeffs.proj_base.values]
@@ -112,7 +385,7 @@ def coeffs_gdppc(obstreat='sep'):
     return coeffs,vcv
 
 
-def coeffs_mortality(obstreat='sep',regtyp='pooled'):
+def coeffs_mortality_old(obstreat='sep',regtyp='pooled'):
     fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'mortality/*.csv'))})
     fns['proj_base'] = [re.split(r'public\_',re.split(r'\.csv',re.split(r'\/',fn)[-1])[0])[-1] for fn in fns.path.values]
     fns['spectype'] = [re.split(r'\_response\_',re.split(r'\/',fn)[-1])[0] for fn in fns.path.values]
@@ -123,7 +396,7 @@ def coeffs_mortality(obstreat='sep',regtyp='pooled'):
     
     fns = fns.sort_index()
 
-    def get_coeffs_mortality(output,obstreat,regtyp='pooled',fns=fns,drop_intersect = True):
+    def get_coeffs_mortality_old(output,obstreat,regtyp='pooled',fns=fns,drop_intersect = True):
         ''' Reading Carleton et al. mortality regression output
     
         Parameters
@@ -280,7 +553,7 @@ def coeffs_mortality(obstreat='sep',regtyp='pooled'):
         
         return dss
 
-    coeffs,vcv = get_coeffs_mortality('coeffs',obstreat,regtyp),get_coeffs_mortality('vcv',obstreat,regtyp)
+    coeffs,vcv = get_coeffs_mortality_old('coeffs',obstreat,regtyp),get_coeffs_mortality_old('vcv',obstreat,regtyp)
 
     # Turn ERA5-025 into ERA5
     coeffs['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in coeffs.proj_base.values]
@@ -294,7 +567,7 @@ def coeffs_mortality(obstreat='sep',regtyp='pooled'):
     return coeffs,vcv
 
 
-def coeffs_payroll(obstreat='sep',popweight=True):
+def coeffs_payroll_old(obstreat='sep',popweight=True):
     fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+r'payroll/regresults*tasmax*.csv'))})
     fns = fns.iloc[[not re.search(r'\_os\_',fn) for fn in fns['path'].values]]
     fns['proj_base'] = [re.split(r'\_',re.split(r'\/',fn)[-1])[3] for fn in fns['path'].values]

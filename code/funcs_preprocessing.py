@@ -11,8 +11,8 @@ import dask
 import zarr
 from fsspec.implementations import local
 
-from funcs_support import get_params,get_filepaths
-from funcs_aux import utility_save,_verify_file_rows,_find_main_variable
+from funcs_support import get_params,get_filepaths,utility_save
+from funcs_aux import _verify_file_rows,_find_main_variable
 
 def reshape_for_rolling(ds,wwidth,drop_leaps=True,
                         wrap_years = False):
@@ -93,7 +93,7 @@ def reshape_for_rolling(ds,wwidth,drop_leaps=True,
         ds = xr.concat([ds,ds_doubled],dim='dayofyear')
     return ds
 
-def from_cache(fn_in,fn_out,fs,save_kwargs = {'zarr_format':2}):
+def from_cache(fn_in,fn_out,fs,save_kwargs = {'zarr_format':3}):
     ''' Decorator for caching step 
 
     Loads the zarr dataset at `fn_in`, applies a function to it,
@@ -119,7 +119,7 @@ def from_cache(fn_in,fn_out,fs,save_kwargs = {'zarr_format':2}):
             ds = func(ds,*args,**kwargs)
     
             # Save modified data
-            utility_save(ds,fn_out,save_kwargs = save_kwargs)
+            utility_save(ds.drop_encoding(),fn_out,save_kwargs = save_kwargs)
             
             # Remove original cache
             fs.rm(fn_in,recursive=True)

@@ -213,6 +213,7 @@ def _remove_chunk_encoding(ds):
             del ds[var0].encoding['chunks']
     if 'chunks' in ds.encoding:
         del ds.encoding['chunks']
+    ds = ds.drop_encoding()
     return ds
 
 def _restore_doys(ds,params_proc):
