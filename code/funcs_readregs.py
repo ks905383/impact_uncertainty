@@ -16,7 +16,8 @@ from funcs_support import get_filepaths,get_params,utility_save
 dir_list = get_params()
 
 
-def coeffs_gdppc(obstreat='sep',resolution='025deg',timeframe='1980-2010',return_raw = False):
+def coeffs_gdppc(obstreat='sep',resolution='025deg',timeframe='1980-2010',return_raw = False,joint_=False):
+
     # Get relevant filenames
     fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'gdppc/reg*.csv'))})
     # Extract properties
@@ -29,52 +30,141 @@ def coeffs_gdppc(obstreat='sep',resolution='025deg',timeframe='1980-2010',return
     fns = fns.set_index(['proj_base','resolution','timeframe','obstreat','datatype'])
     fns = fns.sort_index()
     
-    # Load data 
-    coeffs =[]
-    vcvs = []
+    # Subset by desired regression outpus
+    fns = fns.iloc[fns.index.get_level_values('obstreat') == obstreat,:]
+    if joint_: 
+        fns = fns.iloc[fns.index.get_level_values('proj_base') == 'ALLREA',:]
+    if len(fns) == 0:
+        raise Exception('No output files foud to concatenate')
+    
+    outputs = {'coeffs':[],
+               'vcv':[],
+               'coeffs_joint':[],
+               'vcv_joint':[]}
+
+    repl_mods = {'ERA5_025':'ERA5',
+                 'JRA_3Q':'JRA-3Q'}
     
     for row in fns.iterrows():
         df_tmp = pd.read_csv(row[1]['path'])
-        df_tmp.columns = ['tassumpoly_1','tassumpoly_2']
-        if row[0][-1] == 'coeffs':
-            df_tmp.index = [row[0][0]]
-            ds_tmp = df_tmp.to_xarray().rename({'index':'proj_base'}).to_dataarray(dim='pred',name='coeffs')
-            ds_tmp = ds_tmp.expand_dims({v:[val] for v,val in zip(['resolution','timeframe','obstreat'],
-                                                         row[0][1:4])})
+    
+        # ---- Get column names
+        if row[0][0] == 'ALLREA':
+            joint_onefile = True
+            colnames = [re.sub('temp','tassumpoly_1',re.sub(r'temp\_c\_temp','tassumpoly_2',colname))
+                      for colname in df_tmp]
+            for obs_mod,rn in repl_mods.items(): 
+                colnames = [re.sub(obs_mod,rn,colname) for colname in colnames]
             
-            coeffs.append(ds_tmp)
+            colnames = pd.MultiIndex.from_tuples([(re.split(r'\_',colname)[0],'_'.join(re.split(r'\_',colname)[1:None])) for colname in colnames],
+                                             names = ['proj_base','pred'])
+            df_tmp.columns = colnames
+        else:
+            joint_onefile = False
+            colnames = ['tassumpoly_1','tassumpoly_2']
+            df_tmp.columns = colnames
+    
+        # ---- Turn into xarray dataset
+        if row[0][-1] == 'coeffs':
+            if joint_onefile: 
+                ds_tmp = df_tmp.melt(value_name='coeffs').set_index(['proj_base','pred']).to_xarray()
+            else:
+                df_tmp.index = [row[0][0]]
+                ds_tmp = df_tmp.to_xarray().rename({'index':'proj_base'}).to_dataarray(dim='pred',name='coeffs')
+            
         elif row[0][-1] == 'vcv':
-            df_tmp.index = ['tassumpoly_1','tassumpoly_2']
-            ds_tmp = df_tmp.to_xarray().rename({'index':'pred_1'}).to_dataarray(dim='pred_2',name='vcv')
-            ds_tmp = ds_tmp.expand_dims({v:[val] for v,val in zip(['proj_base','resolution','timeframe','obstreat'],
-                                                         row[0][0:4])})
-            vcvs.append(ds_tmp)
+            if joint_onefile:
+                df_tmp.index = colnames.set_names(['proj_base_1','pred_1'])
+                df_tmp.columns = colnames.set_names(['proj_base_2','pred_2'])
+                ds_tmp = df_tmp.stack(level=list(range(df_tmp.columns.nlevels))).to_xarray().to_dataset(name='vcv')
+            else:
+                df_tmp.index = colnames
+                ds_tmp = df_tmp.to_xarray().rename({'index':'pred_1'}).to_dataarray(dim='pred_2',name='vcv')
         else:
             print(f'{row[0][-1]} is not one of coeffs, vcv, do not know how to deal, skipped.')
     
-    coeffs = xr.merge(coeffs,join='outer',compat='no_conflicts')
-    vcvs = xr.merge(vcvs,join='outer',compat='no_conflicts')
+        # ---- Metadata processing
+        # Get names and positions of metadata dimensions
+        dim_names = [idx for idx in fns.index.names if idx not in ['datatype']]
+        if not (('proj_base' not in ds_tmp.dims) and ('proj_base_1' not in ds_tmp.dims)):
+            dim_names = [d for d in dim_names if d != 'proj_base']
+        # Add metadata coordinates
+        dim_idxs = [fns.index.names.index(idx) for idx in dim_names]
+        ds_tmp = ds_tmp.expand_dims({v:[val] for v,val in zip(dim_names,np.array(row[0])[dim_idxs])})
+        
+        # Add to full list
+        if joint_onefile:
+            outputs[f'{row[0][-1]}_joint'].append(ds_tmp)
+        else:
+           outputs[f'{row[0][-1]}'].append(ds_tmp)
+    
+    # Merge
+    for v in outputs:
+        if len(outputs[v])>0:
+            outputs[v] = xr.merge(outputs[v],join='outer',compat='no_conflicts')
+    
+    if joint_onefile:
+        coeffs_out,vcv_out = outputs['coeffs_joint'],outputs['vcv_joint']
+    else:
+        coeffs_out,vcv_out = outputs['coeffs'],outputs['vcv']
     
     # Turn ERA5-025 into ERA5
-    coeffs['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in coeffs.proj_base.values]
-    if 'proj_base_1' in vcvs.sizes:
+    coeffs_out['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in coeffs_out.proj_base.values]
+    if 'proj_base_1' in vcv_out.sizes:
         for k in [1,2]:
-            vcvs[f'proj_base_{str(k)}'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv[f'proj_base_{str(k)}'].values]
+            vcv_out[f'proj_base_{str(k)}'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv_out[f'proj_base_{str(k)}'].values]
     else:
-        vcvs['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcvs.proj_base.values]
-
+        vcv_out['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv_out.proj_base.values]
     
+        
+    if not return_raw:
+        coeffs_out = coeffs_out.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe)
+        vcv_out= vcv_out.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe)
+    return coeffs_out,vcv_out
 
-    if return_raw:
-        return coeffs,vcvs
-    else:
-        coeffs = coeffs.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe)
-        vcvs = vcvs.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe)
-    return coeffs,vcvs
+
 
 
 def coeffs_mortality(obstreat='sep',resolution='025deg',timeframe='1980-2010',spec='pooled',indflag='noInd',
-                     return_raw = False):    
+                     return_raw = False,joint_=False):
+
+
+
+    def col_to_index(col,pred_names,obs_names = ['MERRA2','JRA-3Q','ERA5-025','GMFD'],append_cons=True):
+        comps = []
+    
+        if np.any([re.search(r'^age',k) for k in re.split(r'\_',col)]):
+            # Get ageset
+            ageset = [k for k in re.split(r'\_',col) if re.search(r'^age',k)][0]
+            comps.append(ageset)
+            # Remove from col
+            col = re.sub(ageset+r'\_','',col)
+        
+        # Get temperature pred
+        pred_name = re.search(r'tavg\_poly\_[0-9]',col).group()
+        pred_name_out = [k for k in pred_names if re.search(r'\_'+re.split(r'\_',pred_name)[-1]+r'$',k)][0]
+        comps.append(pred_name_out)
+        # Remove from col
+        col = re.sub(pred_name,'',col)
+    
+        if np.any([re.search(re.sub(r'\-','_',mod),col) for mod in obs_names]):
+            obs_name = [k.group() for k in [re.search(re.sub(r'\-','_',mod),col) for mod in obs_names] if k is not None][0]
+            obs_name_out = re.sub(r'\_','-',obs_name)
+            comps.append(obs_name_out)
+            # Remove from col
+            col = re.sub(obs_name+r'\_','',col)
+        
+        # Now, any covariates
+        if len(col) == 0:
+            if append_cons:
+                comps.append('1')
+        else:
+            comps.append(re.split(r'\_c\_',col)[-1])
+        
+        comps = tuple(comps)
+        return comps
+    
+    
     # Get relevant filenames
     fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'mortality/reg*.csv'))})
     
@@ -89,68 +179,126 @@ def coeffs_mortality(obstreat='sep',resolution='025deg',timeframe='1980-2010',sp
     
     fns = fns.set_index(['proj_base','resolution','timeframe','obstreat','spec','indflag','datatype'])
     fns = fns.sort_index()
+    
+    
+    # Subset by desired regression outpus
+    fns = fns.iloc[fns.index.get_level_values('spec') == spec,:]
+    fns = fns.iloc[fns.index.get_level_values('obstreat') == obstreat,:]
+    if joint_: 
+        fns = fns.iloc[fns.index.get_level_values('proj_base') == 'ALLREA',:]
+    if len(fns) == 0:
+        raise Exception('No output files foud to concatenate')
+    
+    outputs = {'coeffs':[],
+               'vcv':[],
+               'coeffs_interacted':[],
+               'vcv_interacted':[],
+               'coeffs_joint':[],
+               'vcv_joint':[]}
 
-    
     pred_names = [f'tassumpoly_{str(k)}' for k in np.arange(1,5)]
-    
-    # Load data 
-    coeffs =[]
-    vcvs = []
     
     for row in fns.iterrows():
         df_tmp = pd.read_csv(row[1]['path'])
-        df_tmp.columns = pred_names
+
+        # ---- Get column names
+        joint_onefile = False
+        if row[0][0] == 'ALLREA':
+            joint_onefile = True
+        
+        if np.any(['age' in col for col in df_tmp.columns]):
+            interacted = True
+            multi_pred_names = pd.MultiIndex.from_tuples([col_to_index(col,pred_names=pred_names) for col in df_tmp.columns],
+                                  names = ['ageset','pred','covar'])
+            df_tmp.columns = multi_pred_names
+        else:
+            interacted = False
+            if joint_onefile:
+                colnames = pd.MultiIndex.from_tuples([col_to_index(col,pred_names=pred_names,append_cons=False) for col in df_tmp.columns],
+                             names = ['pred','proj_base'])
+                df_tmp.columns = colnames
+            else:
+                df_tmp.columns = pred_names
+
+        # ---- Turn into xarray dataset
         if row[0][-1] == 'coeffs':
-            # Get names and positions of metadata dimensions
-            dim_names = [idx for idx in fns.index.names if idx not in ['proj_base','datatype']]
-            dim_idxs = [fns.index.names.index(idx) for idx in dim_names]
-    
-            df_tmp.index = [row[0][0]]
-            ds_tmp = df_tmp.to_xarray().rename({'index':'proj_base'}).to_dataarray(dim='pred',name='coeffs')
-            ds_tmp = ds_tmp.expand_dims({v:[val] for v,val in zip(dim_names,
-                                                                 np.array(row[0])[dim_idxs])})
-            
-            coeffs.append(ds_tmp)
+            if joint_onefile: 
+                ds_tmp = df_tmp.melt(value_name='coeffs').set_index(['proj_base','pred']).to_xarray()
+                ds_tmp['pred'] = pred_names
+            else:
+                # Make obs_mod the index
+                df_tmp.index = [row[0][0]]
+                if interacted:
+                    ds_tmp = df_tmp.melt().set_index(['ageset','pred','covar']).sort_index().to_xarray().rename({'value':'coeffs'})
+                else:
+                    ds_tmp = df_tmp.to_xarray().rename({'index':'proj_base'}).to_dataarray(dim='pred',name='coeffs')
+                
         elif row[0][-1] == 'vcv':
-            # Get names and positions of metadata dimensions
-            dim_names = [idx for idx in fns.index.names if idx not in ['datatype']]
-            dim_idxs = [fns.index.names.index(idx) for idx in dim_names]
-            
-            df_tmp.index = pred_names
-            ds_tmp = df_tmp.to_xarray().rename({'index':'pred_1'}).to_dataarray(dim='pred_2',name='vcv')
-            ds_tmp = ds_tmp.expand_dims({v:[val] for v,val in zip(dim_names,np.array(row[0])[dim_idxs])})
-            vcvs.append(ds_tmp)
+            if joint_onefile:
+                df_tmp.index = colnames.set_names(['pred_1','proj_base_1'])
+                df_tmp.columns = colnames.set_names(['pred_2','proj_base_2'])
+                ds_tmp = df_tmp.stack(level=list(range(df_tmp.columns.nlevels))).to_xarray().to_dataset(name='vcv')
+            else:    
+                if interacted:
+                    df_tmp.columns = multi_pred_names.set_names(['ageset_1','pred_1','covar_1'])
+                    df_tmp.index = multi_pred_names.set_names(['ageset_2','pred_2','covar_2'])
+                    ds_tmp = df_tmp.stack(level=list(range(df_tmp.columns.nlevels))).to_xarray().to_dataset(name='vcv')
+                else:
+                    df_tmp.index = pred_names
+                    ds_tmp = df_tmp.to_xarray().rename({'index':'pred_1'}).to_dataarray(dim='pred_2',name='vcv')
         else:
             print(f'{row[0][-1]} is not one of coeffs, vcv, do not know how to deal, skipped.')
+        
+        # ---- Metadata processing
+        # Get names and positions of metadata dimensions
+        dim_names = [idx for idx in fns.index.names if idx not in ['datatype']]
+        if not (('proj_base' not in ds_tmp.dims) and ('proj_base_1' not in ds_tmp.dims)):
+            dim_names = [d for d in dim_names if d != 'proj_base']
+        # Add metadata coordinates
+        dim_idxs = [fns.index.names.index(idx) for idx in dim_names]
+        ds_tmp = ds_tmp.expand_dims({v:[val] for v,val in zip(dim_names,np.array(row[0])[dim_idxs])})
+        
+        # Add to full list
+        if joint_onefile:
+            outputs[f'{row[0][-1]}_joint'].append(ds_tmp)
+        else:
+            if interacted:
+                outputs[f'{row[0][-1]}_interacted'].append(ds_tmp)
+            else:
+                outputs[f'{row[0][-1]}'].append(ds_tmp)
     
+    # Merge
+    for v in outputs:
+        if len(outputs[v])>0:
+            outputs[v] = xr.merge(outputs[v],join='outer',compat='no_conflicts')
     
-    coeffs = xr.merge(coeffs,join='outer',compat='no_conflicts')
-    vcvs = xr.merge(vcvs,join='outer',compat='no_conflicts')
-    
+    if joint_onefile:
+        coeffs_out,vcv_out = outputs['coeffs_joint'],outputs['vcv_joint']
+    elif spec == 'interacted':
+        coeffs_out,vcv_out = outputs['coeffs_interacted'],outputs['vcv_interacted']
+    else:
+        coeffs_out,vcv_out = outputs['coeffs'],outputs['vcv']
+
     # Turn ERA5-025 into ERA5
-    coeffs['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in coeffs.proj_base.values]
-    if 'proj_base_1' in vcvs.sizes:
+    coeffs_out['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in coeffs_out.proj_base.values]
+    if 'proj_base_1' in vcv_out.sizes:
         for k in [1,2]:
-            vcvs[f'proj_base_{str(k)}'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv[f'proj_base_{str(k)}'].values]
+            vcv_out[f'proj_base_{str(k)}'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv_out[f'proj_base_{str(k)}'].values]
     else:
-        vcvs['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcvs.proj_base.values]
+        vcv_out['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv_out.proj_base.values]
 
-    if return_raw:
-        return coeffs,vcvs
-    else:
-        coeffs = coeffs.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,spec=spec,indflag=indflag)
-        vcvs = vcvs.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,spec=spec,indflag=indflag)
-        return coeffs,vcvs
-
-
-def coeffs_payroll(obstreat='sep',resolution='025deg',timeframe='1986-2011',weighting='pop',
-                   joint_type = 'sep',
+        
+    if not return_raw:
+        coeffs_out = coeffs_out.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,spec=spec,indflag=indflag)
+        vcv_out= vcv_out.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,spec=spec,indflag=indflag)
+    return coeffs_out,vcv_out
+    
+def coeffs_payroll(obstreat='sep',resolution='025deg',timeframe='1986-2008',weighting='pop',
+                   joint_ = False,
                      return_raw = False):
-    repl_mods = {'ERA5_025':'ERA5',
-                 'JRA_3Q':'JRA-3Q'}
     
-    fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'payroll/*.csv'))})
-    
+    # ---- Get filepaths of regression output csvs
+    fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'payroll/*.csv'))})    
     fns['datatype'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[1])[0] for fn in fns.path.values]
     fns['weighting'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[4])[0] for fn in fns.path.values]
     fns['resolution'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[3])[0] for fn in fns.path.values]
@@ -158,133 +306,107 @@ def coeffs_payroll(obstreat='sep',resolution='025deg',timeframe='1986-2011',weig
     fns['timeframe'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[6])[0] for fn in fns.path.values]
     fns['obstreat'] = [re.split(r'\_',re.search(r'\_JOINT.*[\.\_]',fn).group()[1:-1].lower())[0] if 'JOINT' in fn else 'sep' for fn in fns.path.values]
     
-    
     fns = fns.set_index(['proj_base','resolution','timeframe','obstreat','weighting','datatype'])
     fns = fns.sort_index()
     
-    coeffs = []
-    coeffs_all = []
-    vcvs = []
-    vcvs_all = []
+    # Subset by desired regression outpus
+    fns = fns.iloc[fns.index.get_level_values('obstreat') == obstreat,:]
+    if joint_: 
+        fns = fns.iloc[fns.index.get_level_values('proj_base') == 'ALLREA',:]
+    if len(fns) == 0:
+        raise Exception('No output files foud to concatenate')
     
-    for row in fns.iterrows():
+    
+    outputs = {'coeffs':[],
+               'vcv':[],
+               'coeffs_joint':[],
+               'vcv_joint':[]}
+    
+    repl_mods = {'ERA5_025':'ERA5',
+                     'JRA_3Q':'JRA-3Q'}
+    
+    # ---- Process each file in directory that fits desired qualities
+    for row in fns.iterrows():#fns.iterrows():
+        df_tmp = pd.read_csv(row[1]['path'])
+    
+        # ---- Get column names
+        if row[0][0] == 'ALLREA':
+            joint_onefile = True
+            colnames = [col for col in df_tmp]
+            for obs_mod,rn in repl_mods.items(): 
+                colnames = [re.sub(obs_mod,rn,colname) for colname in colnames]
+            
+            colnames = pd.MultiIndex.from_tuples([(re.split(r'\_',colname)[0],'_'.join(re.split(r'\_',colname)[1:None])) for colname in colnames],
+                                             names = ['proj_base','pred'])
+            df_tmp.columns = colnames
+        else:
+            joint_onefile = False
+            #colnames = ['tassumpoly_1','tassumpoly_2']
+            #df_tmp.columns = colnames
+    
+        # ---- Turn into xarray dataset
         if row[0][-1] == 'coeffs':
-            if row[0][0] == 'ALLREA':
-                df_tmp = pd.read_csv(row[1]['path'])
-                
-                for obs_mod,rn in repl_mods.items():
-                    df_tmp.columns = [re.sub(obs_mod,rn,colname) for colname in df_tmp]
-                
-                df_tmp.columns = pd.MultiIndex.from_tuples([(re.split(r'\_',colname)[0],'_'.join(re.split(r'\_',colname)[1:None])) 
-                                                            for colname in df_tmp.columns],
-                                         names = ['proj_base','pred'])
-                
+            if joint_onefile:
                 ds_tmp = df_tmp.melt(value_name='coeffs').set_index(['proj_base','pred']).to_xarray()
-                
-                # Get names and positions of metadata dimensions
-                dim_names = [idx for idx in fns.index.names if idx not in ['proj_base','datatype']]
-                dim_idxs = [fns.index.names.index(idx) for idx in dim_names]
             else:
-                df_tmp = pd.read_csv(row[1]['path'])
                 ds_tmp = df_tmp.melt(value_name='coeffs').rename({'variable':'pred'},axis=1).set_index(['pred']).to_xarray()
-                
-                # Get names and positions of metadata dimensions
-                dim_names = [idx for idx in fns.index.names if idx not in ['datatype']]
-                dim_idxs = [fns.index.names.index(idx) for idx in dim_names]
-            
-            
-            # Put in format that can be propagated easily, 
-            # across all temperature bins above 90 degrees            
-            #bin_names = [f'tasmaxbinF_{str(bin)}' for bin in np.arange(92.5,127.6,5)]
-            
-            ds_tmp = ds_tmp.sel(pred = ['days90plus'])#.expand_dims({'pred':bin_names})
-            
-            ds_tmp = ds_tmp.expand_dims({v:[val] for v,val in zip(dim_names,
-                                          np.array(row[0])[dim_idxs])})
-
-            ds_tmp['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in ds_tmp.proj_base.values]
-    
-            if row[0][0] == 'ALLREA':
-                coeffs_all.append(ds_tmp)
-            else:
-                coeffs.append(ds_tmp)
         elif row[0][-1] == 'vcv':
-            df_tmp = pd.read_csv(row[1]['path'])
-            if row[0][0] == 'ALLREA':
-    
-                for obs_mod,rn in repl_mods.items():
-                    df_tmp.columns = [re.sub(obs_mod,rn,colname) for colname in df_tmp]
-                
-                colnames = df_tmp.columns.copy()
-                df_tmp.columns = pd.MultiIndex.from_tuples([(re.split(r'\_',colname)[0],'_'.join(re.split(r'\_',colname)[1:None])) 
-                                                            for colname in colnames],
-                                         names = ['proj_base_1','pred_1'])
-                df_tmp.index = pd.MultiIndex.from_tuples([(re.split(r'\_',colname)[0],'_'.join(re.split(r'\_',colname)[1:None])) 
-                                                          for colname in colnames],
-                                         names = ['proj_base_2','pred_2'])
-                
-                ds_tmp = (df_tmp.melt(ignore_index=False).rename({'value':'vcv'},axis=1).reset_index().
-                 set_index(['proj_base_1','pred_1','proj_base_2','pred_2']).sort_index()).to_xarray()
-                
-    
-                # Get names and positions of metadata dimensions
-                dim_names = [idx for idx in fns.index.names if idx not in ['proj_base','datatype']]
-                dim_idxs = [fns.index.names.index(idx) for idx in dim_names]
-            
+            if joint_onefile:
+                df_tmp.index = colnames.set_names(['proj_base_1','pred_1'])
+                df_tmp.columns = colnames.set_names(['proj_base_2','pred_2'])
+                ds_tmp = df_tmp.stack(level=list(range(df_tmp.columns.nlevels))).to_xarray().to_dataset(name='vcv')
             else:
                 df_tmp.index = df_tmp.columns.copy()
                 df_tmp.index.name = 'pred_2'
                 df_tmp.columns.name = 'pred_1'
                 
-                ds_tmp = (df_tmp.melt(ignore_index=False).reset_index().
-                          set_index(['pred_1','pred_2']).to_xarray().rename({'value':'vcv'}))
+                ds_tmp = df_tmp.melt(ignore_index=False).reset_index().set_index(['pred_1','pred_2']).to_xarray().rename({'value':'vcv'})
+        else:
+            print(f'{row[0][-1]} is not one of coeffs, vcv, do not know how to deal, skipped.')
     
-                # Get names and positions of metadata dimensions
-                dim_names = [idx for idx in fns.index.names if idx not in ['datatype']]
-                dim_idxs = [fns.index.names.index(idx) for idx in dim_names]
-
-    
-            # Get just hte value for days > 90
+        # Get just the value for days > 90
+        if 'pred_1' in ds_tmp.dims:
             ds_tmp = ds_tmp.sel(pred_1 = ['days90plus'],
-                                    pred_2 = ['days90plus'])
-            
-            # Add metadata dimensions
-            ds_tmp = ds_tmp.expand_dims({v:[val] for v,val in zip(dim_names,
-                                      np.array(row[0])[dim_idxs])})
-            if 'proj_base_1' in ds_tmp.sizes:
-                ds_tmp['proj_base_1'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in ds_tmp.proj_base_1.values]
-                ds_tmp['proj_base_2'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in ds_tmp.proj_base_2.values]
-            else:
-                ds_tmp['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in ds_tmp.proj_base.values]
-
-
-            
-            if row[0][0] == 'ALLREA':
-                vcvs_all.append(ds_tmp)
-            else:
-                vcvs.append(ds_tmp)
-        
-    coeffs = xr.merge(coeffs,join='outer',compat='no_conflicts')
-    coeffs_all = xr.merge(coeffs_all,join='outer',compat='no_conflicts')
-    vcvs = xr.merge(vcvs,join='outer',compat='no_conflicts')
-    vcvs_all = xr.merge(vcvs_all,join='outer',compat='no_conflicts')
+                                pred_2 = ['days90plus'])
+        else:
+            ds_tmp = ds_tmp.sel(pred = ['days90plus'])
     
-
-    if joint_type == 'sep':
-        if return_raw:
-            return coeffs,vcvs
+        # ---- Metadata processing
+        # Get names and positions of metadata dimensions
+        dim_names = [idx for idx in fns.index.names if idx not in ['datatype']]
+        if not (('proj_base' not in ds_tmp.dims) and ('proj_base_1' not in ds_tmp.dims)):
+            dim_names = [d for d in dim_names if d != 'proj_base']
+        # Add metadata coordinates
+        dim_idxs = [fns.index.names.index(idx) for idx in dim_names]
+        ds_tmp = ds_tmp.expand_dims({v:[val] for v,val in zip(dim_names,np.array(row[0])[dim_idxs])})
+        
+        # Add to full list
+        if joint_onefile:
+            outputs[f'{row[0][-1]}_joint'].append(ds_tmp)
         else:
-            coeffs = coeffs.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,weighting=weighting)
-            vcvs = vcvs.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,weighting=weighting)
-            return coeffs,vcvs
+           outputs[f'{row[0][-1]}'].append(ds_tmp)
+    # Merge
+    for v in outputs:
+        if len(outputs[v])>0:
+            outputs[v] = xr.merge(outputs[v],join='outer',compat='no_conflicts')
+    
+    if joint_onefile:
+        coeffs_out,vcv_out = outputs['coeffs_joint'],outputs['vcv_joint']
     else:
-        if return_raw:
-            return coeffs_all,vcvs_all
-        else:
-            coeffs_all = coeffs_all.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,weighting=weighting)
-            vcvs_all = vcvs_all.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,weighting=weighting)
-            return coeffs,vcvs
-
+        coeffs_out,vcv_out = outputs['coeffs'],outputs['vcv']
+    
+    # Turn ERA5-025 into ERA5
+    coeffs_out['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in coeffs_out.proj_base.values]
+    if 'proj_base_1' in vcv_out.sizes:
+        for k in [1,2]:
+            vcv_out[f'proj_base_{str(k)}'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv_out[f'proj_base_{str(k)}'].values]
+    else:
+        vcv_out['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv_out.proj_base.values]
+        
+    if not return_raw:
+        coeffs_out = coeffs_out.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,weighting=weighting)
+        vcv_out= vcv_out.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,weighting=weighting)
+    return coeffs_out,vcv_out
 
 
 
@@ -677,14 +799,18 @@ def load_dmgfs(proc,load_kwargs = {},
     # Load regression coefficients
     if proc == 'gdppc':
         coeffs,vcv = coeffs_gdppc(**load_kwargs)
-        coeffs = coeffs.sel(timeframe='allyears')
-        vcv = vcv.sel(timeframe='allyears')
     elif proc == 'mortality':
         coeffs,vcv = coeffs_mortality(**load_kwargs)
     elif proc == 'payroll':
         coeffs,vcv = coeffs_payroll(**load_kwargs)
     else:
         raise KeyError()
+
+    coeffs = coeffs.dropna('proj_base',how='all')
+    if 'proj_base_1' in vcv:
+        vcv.dropna('proj_base_1').dropna('proj_base_2')
+    else:
+        vcv = vcv.dropna('proj_base',how='all')
 
     # Get MC samples of coefficients
     if 'proj_base_1' in vcv:
@@ -713,8 +839,7 @@ def load_dmgfs(proc,load_kwargs = {},
                                            dask_gufunc_kwargs = {'output_sizes':{'sidx':nsamples}},
                                    vectorize=True)
 
-
-    if 'sumpoly' in coeffs_mvn.pred.values[0]:
+    if np.any(['sumpoly' in k for k in coeffs_mvn.pred.values]):
         ts = np.arange(-20,51)
         var_stem = 'tassumpoly_'
         poly_degs = [int(re.split(var_stem,v)[-1]) for v in coeffs_mvn.pred.values if var_stem in v]
@@ -754,5 +879,13 @@ def load_dmgfs(proc,load_kwargs = {},
                          dim='bin_f')
     
         dmgf = dmgf.rename({'bin_f':'Tref'}).coeffs
+    elif 'days' in coeffs_mvn.pred.values[0]:
+        dmgf = coeffs_mvn.expand_dims({'bin_f':np.arange(92.5, 125,5)}).isel(pred=0)
+        dmgf = xr.concat([xr.zeros_like(dmgf.isel(bin_f=0,drop=True)).expand_dims({'bin_f':np.arange(92.5-20,
+                                                                                           92.5,
+                                                                                           5)}),
+                                  dmgf],
+                                 dim='bin_f')
+        dmgf = dmgf.rename({'bin_f':'Tref'})
 
     return dmgf
