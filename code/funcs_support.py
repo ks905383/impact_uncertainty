@@ -1,6 +1,7 @@
 import xarray as xr
 import xagg as xa
 import pandas as pd
+import geopandas as gpd
 import numpy as np
 from matplotlib import pyplot as plt
 import re
@@ -13,6 +14,41 @@ import shutil
 class NotUniqueFile(Exception):
     """ Exception for when one file needs to be loaded, but the search returned multiple files """
     pass
+
+params_proc = {'mortality':{'shp_fn':'impact-region','geo_typ':'impact-regions'},
+               'gdppc':{'shp_fn':'country-fixed','geo_typ':'adm1'},
+               'payroll':{'shp_fn':'UScounties','geo_typ':'adm2-us'}}
+idxs = {'impact-regions':{'hierid':'locid'},
+        'adm1':{'CNTRY_NAME':'locid'},
+        'adm2-us':{'FIPS':'locid'}}
+
+def load_shp(proc,params_proc=params_proc,idxs=idxs):
+    ''' Load and preprocess shapefiles
+    Removes Antarctica from global gdfs, Alaska + Hawaii from CONUS ones
+
+    '''
+    # Load shapefile
+    with warnings.catch_warnings():
+        # Shapefile winding warning that shows up with impact-regions, 
+        # fixed by load and make_valid() below
+        warnings.filterwarnings('ignore')
+        gdf = gpd.read_file(f'{dir_list['aux']}geo_data/{params_proc[proc]['shp_fn']}.shp')
+    gdf['geometry'] = gdf.make_valid()
+    
+    # Name merging dimension 'locid'
+    gdf = gdf.rename(idxs[params_proc[proc]['geo_typ']],axis=1)
+    
+    # Remove locs if necessary
+    if params_proc[proc]['geo_typ'] == 'impact-regions':
+        # Remove Antarctica
+        gdf = gdf.query('ISO != "ATA"')
+    elif params_proc[proc]['geo_typ'] == 'adm1':
+        gdf = gdf.query('locid != "Antarctica"')
+    elif params_proc[proc]['geo_typ'] == 'adm2-us':
+        # Remove Alaska and Hawaii
+        gdf = gdf.iloc[[sn not in ['Alaska','Hawaii'] for sn in gdf.STATE_NAME.values]]
+
+    return gdf
 
 
 
@@ -121,7 +157,7 @@ def get_filepaths(source_dir = 'raw',
                     proc_comps.append(np.where(grid_match)[0][0])
 
                 # GWL slot
-                gwl_match = [re.search('(^GWL)|(ALLGWLs)|(ALLGWLS)',comp) 
+                gwl_match = [re.search('(^GWL)|(ALLGWLs)|(ALLGWLS)|(ALLTIMEPERIODS)',comp) 
                            for comp in comps]
                 if np.any(gwl_match):
                     slots['gwl'] = np.where(gwl_match)[0][0]
@@ -129,6 +165,8 @@ def get_filepaths(source_dir = 'raw',
 
                     if (comps[slots['gwl']] == 'ALLGWLs') or (comps[slots['gwl']] == 'ALLGWLS'):
                         slots['gwl'] = 'ALLGWLs'
+                    elif comps[slots['gwl']] == 'ALLTIMEPERIODS':
+                        slots['gwl'] = 'ALLTIMEPERIODS'
                     else:
                         slots['gwl'] = re.sub(r'\-', '.', comps[slots['gwl']][3:None])
 
