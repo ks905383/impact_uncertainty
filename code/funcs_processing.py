@@ -47,7 +47,10 @@ def calc_uncerts(da,dim_order = ['sidx','proj_base','exprun','model'],
 
     # Get each as a fraction of their sum (`.to_array()` turns the dataset into a dataarray
     # with dimension 'variable')
-    uncerts_norm = uncerts / uncerts.to_array().sum('variable')
+    with warnings.catch_warnings():
+        # Silence divide by 0 warning over nans
+        warnings.filterwarnings('ignore')
+        uncerts_norm = uncerts / uncerts.to_array().sum('variable')
 
 
     uncerts = xr.concat([uncerts,uncerts_norm],
