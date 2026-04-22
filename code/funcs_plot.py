@@ -151,7 +151,8 @@ def printRoman(number):
     return output
 
 
-def plot_map(da,gdf,proj=ccrs.PlateCarree(),fig=None,ax=None,cat_cmap=None,**plot_kwargs):
+def plot_map(da,gdf,proj=ccrs.PlateCarree(),fig=None,ax=None,cat_cmap=None,join_by_color = False,**plot_kwargs,
+             ):
     '''
 
     Parameters
@@ -179,6 +180,68 @@ def plot_map(da,gdf,proj=ccrs.PlateCarree(),fig=None,ax=None,cat_cmap=None,**plo
                               **plot_kwargs)
         
     return fig,ax
+
+def create_segcmap(plot_data,cbar_params,return_all = False,centered = False):
+    '''
+
+    Parameters
+    ------------------
+    plot_data : 1-D xr.DataArray
+
+    cbar_params : dict
+        Containing:
+            'vmin'
+            'vmax'
+            'levels'
+            'cmap'
+
+    return_all : bool
+        If True, returns bin bounds and discrete 
+        colors used
+
+    centered : bool
+        If True, then `vmin` and `vmax` are 
+        assumed to be the _center_ of the first
+        and last bins
+
+    Returns
+    ------------------
+    colors : xr.DataArray
+        With the same dims, coords as plot_data
+
+    bounds : np.Array
+        If `return_bounds` only
+
+    colors_discrete : list
+        If `return_bounds` only
+    '''
+    if centered:
+        range = cbar_params['vmax'] - cbar_params['vmin']
+        binwidth = (range + 1)/cbar_params['levels']
+        
+        bounds = np.linspace(cbar_params['vmin']-binwidth/2,cbar_params['vmax']+binwidth/2,
+                             cbar_params['levels']+1)
+    else:
+        bounds = np.linspace(cbar_params['vmin'],cbar_params['vmax'],cbar_params['levels']+1)
+    
+    # Create segmented colormap
+    norm = mpl.colors.BoundaryNorm(bounds,cbar_params['cmap'].N)
+
+    # Get color of each value of plot_data
+    colors = [mpl.colors.to_hex(cbar_params['cmap'](norm(v))) for v in plot_data.values]
+    # Turn into xarray to match up dimensions
+    colors = xr.DataArray(colors,
+             dims = plot_data.dims,
+             coords = plot_data.coords)
+
+    if return_all:
+        # Get reference colors used (as the color of the 
+        # center of each discrete bin)
+        colors_discrete = [cbar_params['cmap'](norm(v)) for v in bounds[0:-1]+np.diff(bounds)[0]/2]
+
+        return colors,bounds,colors_discrete
+    else:
+        return colors
     
 
 
