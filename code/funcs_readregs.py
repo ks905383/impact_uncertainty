@@ -16,18 +16,29 @@ from funcs_support import get_filepaths,get_params,utility_save
 dir_list = get_params()
 
 
-def coeffs_gdppc(obstreat='sep',resolution='025deg',timeframe='1980-2010',return_raw = False,joint_=False):
+def coeffs_gdppc(obstreat='sep',resolution='025deg',timeframe='1980-2010',return_raw = False,joint_=False,get_loos=False):
 
     # Get relevant filenames
-    fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'gdppc/reg*.csv'))})
+    if get_loos:
+        fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'gdppc/loos/reg*.csv'))})
+    else:    
+        fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'gdppc/reg*.csv'))})
+    
     # Extract properties
     fns['datatype'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[1])[0] for fn in fns.path.values]
     fns['resolution'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[3])[0] for fn in fns.path.values]
     fns['proj_base'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[4])[0] for fn in fns.path.values]
     fns['timeframe'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[5])[0] for fn in fns.path.values]
     fns['obstreat'] = ['joint' if re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[-1])[0]=='JOINT' else 'sep' for fn in fns.path.values]
+
+    index_cols = ['proj_base','resolution','timeframe','obstreat','datatype']
+
+    if get_loos:
+        fns['loo_id'] = [[n for n in re.split(r'\_',re.split(r'\/',fn)[-1]) if re.search(r'^no.*\.csv$',n)][0][2:-4]
+                        for fn in fns.path.values]
+        index_cols.append('loo_id')
     
-    fns = fns.set_index(['proj_base','resolution','timeframe','obstreat','datatype'])
+    fns = fns.set_index(index_cols)
     fns = fns.sort_index()
     
     # Subset by desired regression outpus
@@ -65,14 +76,16 @@ def coeffs_gdppc(obstreat='sep',resolution='025deg',timeframe='1980-2010',return
             df_tmp.columns = colnames
     
         # ---- Turn into xarray dataset
-        if row[0][-1] == 'coeffs':
+        if 'coeffs' in row[0]:
+            filetyp = 'coeffs'
             if joint_onefile: 
                 ds_tmp = df_tmp.melt(value_name='coeffs').set_index(['proj_base','pred']).to_xarray()
             else:
                 df_tmp.index = [row[0][0]]
                 ds_tmp = df_tmp.to_xarray().rename({'index':'proj_base'}).to_dataarray(dim='pred',name='coeffs')
             
-        elif row[0][-1] == 'vcv':
+        elif 'vcv' in row[0]:
+            filetyp = 'vcv'
             if joint_onefile:
                 df_tmp.index = colnames.set_names(['proj_base_1','pred_1'])
                 df_tmp.columns = colnames.set_names(['proj_base_2','pred_2'])
@@ -81,7 +94,7 @@ def coeffs_gdppc(obstreat='sep',resolution='025deg',timeframe='1980-2010',return
                 df_tmp.index = colnames
                 ds_tmp = df_tmp.to_xarray().rename({'index':'pred_1'}).to_dataarray(dim='pred_2',name='vcv')
         else:
-            print(f'{row[0][-1]} is not one of coeffs, vcv, do not know how to deal, skipped.')
+            print(f'{row[0]} does not contain one of coeffs, vcv, do not know how to deal, skipped.')
     
         # ---- Metadata processing
         # Get names and positions of metadata dimensions
@@ -94,9 +107,9 @@ def coeffs_gdppc(obstreat='sep',resolution='025deg',timeframe='1980-2010',return
         
         # Add to full list
         if joint_onefile:
-            outputs[f'{row[0][-1]}_joint'].append(ds_tmp)
+            outputs[f'{filetyp}_joint'].append(ds_tmp)
         else:
-           outputs[f'{row[0][-1]}'].append(ds_tmp)
+           outputs[f'{filetyp}'].append(ds_tmp)
     
     # Merge
     for v in outputs:
@@ -126,7 +139,7 @@ def coeffs_gdppc(obstreat='sep',resolution='025deg',timeframe='1980-2010',return
 
 
 def coeffs_mortality(obstreat='sep',resolution='025deg',timeframe='1980-2010',spec='pooled',indflag='noInd',
-                     return_raw = False,joint_=False):
+                     return_raw = False,joint_=False,get_loos = False):
 
 
 
@@ -166,7 +179,10 @@ def coeffs_mortality(obstreat='sep',resolution='025deg',timeframe='1980-2010',sp
     
     
     # Get relevant filenames
-    fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'mortality/reg*.csv'))})
+    if get_loos:
+        fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'mortality/loos/reg*.csv'))})
+    else:    
+        fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'mortality/reg*.csv'))})
     
     # Extract properties
     fns['datatype'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[1])[0] for fn in fns.path.values]
@@ -177,10 +193,16 @@ def coeffs_mortality(obstreat='sep',resolution='025deg',timeframe='1980-2010',sp
     fns['obstreat'] = [re.split(r'\_',re.search(r'\_JOINT.*[\.\_]',fn).group()[1:-1].lower())[0] if 'JOINT' in fn else 'sep' for fn in fns.path.values]
     fns['indflag'] = ['noInd' if 'noIND' in fn else 'wInd' for fn in fns.path.values]
     
-    fns = fns.set_index(['proj_base','resolution','timeframe','obstreat','spec','indflag','datatype'])
+    index_cols = ['proj_base','resolution','timeframe','obstreat','spec','indflag','datatype']
+
+    if get_loos:
+        fns['loo_id'] = [[n for n in re.split(r'\_',re.split(r'\/',fn)[-1]) if re.search(r'^no.*\.csv$',n)][0][2:-4]
+                        for fn in fns.path.values]
+        index_cols.append('loo_id')
+    
+    fns = fns.set_index(index_cols)
     fns = fns.sort_index()
-    
-    
+
     # Subset by desired regression outpus
     fns = fns.iloc[fns.index.get_level_values('spec') == spec,:]
     fns = fns.iloc[fns.index.get_level_values('obstreat') == obstreat,:]
@@ -200,7 +222,7 @@ def coeffs_mortality(obstreat='sep',resolution='025deg',timeframe='1980-2010',sp
     
     for row in fns.iterrows():
         df_tmp = pd.read_csv(row[1]['path'])
-
+    
         # ---- Get column names
         joint_onefile = False
         if row[0][0] == 'ALLREA':
@@ -219,9 +241,10 @@ def coeffs_mortality(obstreat='sep',resolution='025deg',timeframe='1980-2010',sp
                 df_tmp.columns = colnames
             else:
                 df_tmp.columns = pred_names
-
+    
         # ---- Turn into xarray dataset
-        if row[0][-1] == 'coeffs':
+        if 'coeffs' in row[0]:
+            filetyp = 'coeffs'
             if joint_onefile: 
                 ds_tmp = df_tmp.melt(value_name='coeffs').set_index(['proj_base','pred']).to_xarray()
                 ds_tmp['pred'] = pred_names
@@ -233,7 +256,8 @@ def coeffs_mortality(obstreat='sep',resolution='025deg',timeframe='1980-2010',sp
                 else:
                     ds_tmp = df_tmp.to_xarray().rename({'index':'proj_base'}).to_dataarray(dim='pred',name='coeffs')
                 
-        elif row[0][-1] == 'vcv':
+        elif 'vcv' in row[0]:
+            filetyp = 'vcv'
             if joint_onefile:
                 df_tmp.index = colnames.set_names(['pred_1','proj_base_1'])
                 df_tmp.columns = colnames.set_names(['pred_2','proj_base_2'])
@@ -247,7 +271,7 @@ def coeffs_mortality(obstreat='sep',resolution='025deg',timeframe='1980-2010',sp
                     df_tmp.index = pred_names
                     ds_tmp = df_tmp.to_xarray().rename({'index':'pred_1'}).to_dataarray(dim='pred_2',name='vcv')
         else:
-            print(f'{row[0][-1]} is not one of coeffs, vcv, do not know how to deal, skipped.')
+            print(f'Could not find "coeffs" or "vcv" in {str(row[0])}, do not know how to deal, skipped.')
         
         # ---- Metadata processing
         # Get names and positions of metadata dimensions
@@ -260,17 +284,21 @@ def coeffs_mortality(obstreat='sep',resolution='025deg',timeframe='1980-2010',sp
         
         # Add to full list
         if joint_onefile:
-            outputs[f'{row[0][-1]}_joint'].append(ds_tmp)
+            outputs[f'{filetyp}_joint'].append(ds_tmp)
         else:
             if interacted:
-                outputs[f'{row[0][-1]}_interacted'].append(ds_tmp)
+                outputs[f'{filetyp}_interacted'].append(ds_tmp)
             else:
-                outputs[f'{row[0][-1]}'].append(ds_tmp)
+                outputs[f'{filetyp}'].append(ds_tmp)
     
     # Merge
     for v in outputs:
         if len(outputs[v])>0:
             outputs[v] = xr.merge(outputs[v],join='outer',compat='no_conflicts')
+            if get_loos:
+                # Remove India LOOs that are unused 
+                outputs[v] = outputs[v].sel(loo_id=[loo_id for loo_id in outputs['coeffs'].loo_id.values 
+                                                    if not re.search(r'^india',loo_id)])
     
     if joint_onefile:
         coeffs_out,vcv_out = outputs['coeffs_joint'],outputs['vcv_joint']
@@ -292,21 +320,36 @@ def coeffs_mortality(obstreat='sep',resolution='025deg',timeframe='1980-2010',sp
         coeffs_out = coeffs_out.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,spec=spec,indflag=indflag)
         vcv_out= vcv_out.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,spec=spec,indflag=indflag)
     return coeffs_out,vcv_out
+
     
+
 def coeffs_payroll(obstreat='sep',resolution='025deg',timeframe='1986-2008',weighting='pop',
                    joint_ = False,
-                     return_raw = False):
+                     return_raw = False,get_loos=False):
     
     # ---- Get filepaths of regression output csvs
-    fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'payroll/*.csv'))})    
-    fns['datatype'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[1])[0] for fn in fns.path.values]
-    fns['weighting'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[4])[0] for fn in fns.path.values]
-    fns['resolution'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[3])[0] for fn in fns.path.values]
-    fns['proj_base'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[5])[0] for fn in fns.path.values]
-    fns['timeframe'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[6])[0] for fn in fns.path.values]
-    fns['obstreat'] = [re.split(r'\_',re.search(r'\_JOINT.*[\.\_]',fn).group()[1:-1].lower())[0] if 'JOINT' in fn else 'sep' for fn in fns.path.values]
+    # Get relevant filenames
+    if get_loos:
+        fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'payroll/loos/reg*.csv'))})
+    else:    
+        fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'payroll/reg*.csv'))})
     
-    fns = fns.set_index(['proj_base','resolution','timeframe','obstreat','weighting','datatype'])
+    fns['datatype'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[1])[0] for fn in [re.sub(r'pooled\_','',fn) for fn in [re.sub(r'pooled\_','',fn) for fn in fns.path.values]]]
+    fns['weighting'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[4])[0] for fn in [re.sub(r'pooled\_','',fn) for fn in [re.sub(r'pooled\_','',fn) for fn in fns.path.values]]]
+    fns['resolution'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[3])[0] for fn in [re.sub(r'pooled\_','',fn) for fn in [re.sub(r'pooled\_','',fn) for fn in fns.path.values]]]
+    fns['proj_base'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[5])[0] for fn in [re.sub(r'pooled\_','',fn) for fn in [re.sub(r'pooled\_','',fn) for fn in fns.path.values]]]
+    fns['timeframe'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[6])[0] for fn in [re.sub(r'pooled\_','',fn) for fn in [re.sub(r'pooled\_','',fn) for fn in fns.path.values]]]
+    fns['obstreat'] = [re.split(r'\_',re.search(r'\_JOINT.*[\.\_]',fn).group()[1:-1].lower())[0] if 'JOINT' in fn else 'sep' for fn in [re.sub(r'pooled\_','',fn) for fn in fns.path.values]]
+    # NB: the replacement of "pooled" is due to an issue with the filenames in the VCVs, which incorrectly have "pooled" in them as a consequence of a copy-paste issue. 
+    
+    index_cols = ['proj_base','resolution','timeframe','obstreat','weighting','datatype']
+
+    if get_loos:
+        fns['loo_id'] = [[n for n in re.split(r'\_',re.split(r'\/',fn)[-1]) if re.search(r'^no.*\.csv$',n)][0][2:-4]
+                        for fn in [re.sub(r'pooled\_','',fn) for fn in fns.path.values]]
+        index_cols.append('loo_id')
+        
+    fns = fns.set_index(index_cols)
     fns = fns.sort_index()
     
     # Subset by desired regression outpus
@@ -326,7 +369,7 @@ def coeffs_payroll(obstreat='sep',resolution='025deg',timeframe='1986-2008',weig
                      'JRA_3Q':'JRA-3Q'}
     
     # ---- Process each file in directory that fits desired qualities
-    for row in fns.iterrows():#fns.iterrows():
+    for row in fns.iterrows():#tqdm(fns.iterrows(),total=len(fns)):#fns.iterrows():
         df_tmp = pd.read_csv(row[1]['path'])
     
         # ---- Get column names
@@ -345,12 +388,14 @@ def coeffs_payroll(obstreat='sep',resolution='025deg',timeframe='1986-2008',weig
             #df_tmp.columns = colnames
     
         # ---- Turn into xarray dataset
-        if row[0][-1] == 'coeffs':
+        if 'coeffs' in row[0]:
+            filetyp = 'coeffs'
             if joint_onefile:
                 ds_tmp = df_tmp.melt(value_name='coeffs').set_index(['proj_base','pred']).to_xarray()
             else:
                 ds_tmp = df_tmp.melt(value_name='coeffs').rename({'variable':'pred'},axis=1).set_index(['pred']).to_xarray()
-        elif row[0][-1] == 'vcv':
+        elif 'vcv' in row[0]:
+            filetyp = 'vcv'
             if joint_onefile:
                 df_tmp.index = colnames.set_names(['proj_base_1','pred_1'])
                 df_tmp.columns = colnames.set_names(['proj_base_2','pred_2'])
@@ -379,12 +424,13 @@ def coeffs_payroll(obstreat='sep',resolution='025deg',timeframe='1986-2008',weig
         # Add metadata coordinates
         dim_idxs = [fns.index.names.index(idx) for idx in dim_names]
         ds_tmp = ds_tmp.expand_dims({v:[val] for v,val in zip(dim_names,np.array(row[0])[dim_idxs])})
-        
+
         # Add to full list
         if joint_onefile:
-            outputs[f'{row[0][-1]}_joint'].append(ds_tmp)
+            outputs[f'{filetyp}_joint'].append(ds_tmp)
         else:
-           outputs[f'{row[0][-1]}'].append(ds_tmp)
+           outputs[f'{filetyp}'].append(ds_tmp)
+            
     # Merge
     for v in outputs:
         if len(outputs[v])>0:
@@ -402,11 +448,13 @@ def coeffs_payroll(obstreat='sep',resolution='025deg',timeframe='1986-2008',weig
             vcv_out[f'proj_base_{str(k)}'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv_out[f'proj_base_{str(k)}'].values]
     else:
         vcv_out['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv_out.proj_base.values]
+    
         
     if not return_raw:
         coeffs_out = coeffs_out.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,weighting=weighting)
         vcv_out= vcv_out.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,weighting=weighting)
     return coeffs_out,vcv_out
+
 
 
 
