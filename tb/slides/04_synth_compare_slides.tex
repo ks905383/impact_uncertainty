@@ -1,0 +1,443 @@
+\documentclass[10pt,aspectratio=169]{beamer}
+
+% --- Minimal theme ---------------------------------------------------------
+\usetheme{default}
+\usecolortheme{dove}
+\usefonttheme{professionalfonts}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{footline}[frame number]
+\setbeamertemplate{itemize items}[circle]
+\setbeamertemplate{section in toc}[sections numbered]
+\setbeamerfont{frametitle}{size=\large,series=\bfseries}
+\setbeamercolor{frametitle}{fg=black}
+\setbeamercolor{title}{fg=black}
+\setbeamercolor{structure}{fg=black}
+
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{graphicx}
+\graphicspath{{../figs/}}
+\usepackage{amsmath}
+
+\title{Synthesising five reanalyses}
+\subtitle{A rigorous comparison of ensemble-mean, median, PC1, factor model, \\
+  inverse-variance, and UDel-anchored combinations}
+\author{}
+\date{\today}
+
+\begin{document}
+
+\begin{frame}\titlepage\end{frame}
+
+\begin{frame}{Outline}\tableofcontents\end{frame}
+
+% ===========================================================================
+\section{Setup}
+
+\begin{frame}{The problem}
+  \begin{itemize}
+    \item We observe five noisy measurements $\{T_k(c,t)\}_{k=1}^5$ of a
+          latent true temperature $T^*(c,t)$ per (country, year).
+    \item Want a synthesis $\hat T(c,t)$ with a better signal-to-noise
+          ratio than any single $T_k$ --- without access to ground truth
+          and without assuming errors are independent across datasets
+          (ERA5 and JRA-3Q share assimilation; GMFD and UDel share station
+          inputs).
+    \item Throughout, the growth regression is:
+      \[
+      \texttt{growth} = \beta_1 T + \beta_2 T^2 + \boldsymbol\gamma^\top \mathbf{P}
+          + \alpha_i + \tau_t + \delta_i t + \phi_i t^2 + u
+      \]
+      with clustered SE on country. Precipitation controls are
+      \emph{ensemble-mean} precipitation, held fixed across methods, so the
+      only thing varying is the temperature measurement.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Methods evaluated}
+  Eleven temperatures enter the comparison: the five raw datasets and six
+  synthetic constructions.
+  \vspace{0.4em}
+
+  \small
+  \begin{tabular}{lll}
+    \toprule
+    Method & Construction & Assumption \\
+    \midrule
+    MEAN      & $\tfrac{1}{5}\sum_k T_k$                       & iid errors \\
+    MEDIAN    & $\text{median}_k T_k$                          & robust (nonparametric) \\
+    PC1       & first PC of residualised $T$, added to FE fit  & one-factor with constant loadings \\
+    FACTOR    & per-country factor model: $R_k(c,t)=\lambda_k(c)F(c,t)+\varepsilon_k$ & factor structure, loadings vary by $c$ \\
+    MIN-VAR   & $w_k(c)\propto 1/\sigma_k^2(c)$ from factor model & efficient GLS under factor model \\
+    ANCHORED  & UDel as proxy truth; $w_k(c)\propto 1/\text{MSE}_k(c)$ & UDel $\approx$ observations \\
+    \bottomrule
+  \end{tabular}
+
+  \vspace{0.4em}
+  \footnotesize
+  A seventh candidate, OOS-OPT (convex weights tuned to CV-MSE), was
+  attempted and rejected --- see later.
+\end{frame}
+
+% ===========================================================================
+\section{Construction details}
+
+\begin{frame}{MEAN and MEDIAN}
+  \begin{itemize}
+    \item $\hat T_{\text{MEAN}} = \tfrac{1}{5}\sum_k T_k$. MVUE if errors are iid
+          Gaussian. Not iid here --- errors are correlated, so effective
+          variance reduction is below 1/5.
+    \item MEDIAN is robust to single-dataset shocks (e.g.\ the GMFD
+          2009--2010 anomaly). Asymptotically $(\pi/2)/n$ relative to MEAN
+          under Gaussianity --- less efficient, but honest when
+          distributional assumptions are violated.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{PC1: the one-factor model, pooled}
+  Let $\tilde T_k$ be the residualised temperature (after
+  $\alpha_i + \tau_t + \delta_i t + \phi_i t^2$). Pool across all
+  (iso, year) and run PCA on the $N \times 5$ matrix:
+  \[
+  \tilde T_k = \lambda_k F + \varepsilon_k, \qquad \varepsilon_k \perp F.
+  \]
+  First PC carries \textbf{88.0\%} of pooled residual variance. Rescale
+  $\hat F$ to match the sd of the ensemble-mean residual, and add back the
+  fitted FE structure to recover a °C-scale synthetic.
+\end{frame}
+
+\begin{frame}{FACTOR: per-country EM}
+  Same model but loadings and idiosyncratic variances vary by country:
+  \[
+  \tilde T_k(c, t) = \lambda_k(c)\,F(c, t) + \varepsilon_k(c, t),
+  \qquad \varepsilon_k(c,\cdot) \sim \mathcal{N}(0, \sigma_k^2(c)).
+  \]
+  \vspace{-0.5em}
+  \begin{itemize}
+    \item EM, 60 max iters, converges in $\leq 20$. Normalisation:
+          $\text{sd}(F) = 1$, sign chosen so mean($\lambda$) $> 0$.
+    \item Yields, as a by-product, \textbf{measurement-error variance
+          estimates} $\hat\sigma_k^2(c)$ for every (dataset, country).
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{MIN-VAR and ANCHORED: inverse-variance combinations}
+  Under the factor model, the \emph{efficient} unbiased combination is
+  \[
+    \hat T_{\text{MIN-VAR}}(c, t)
+    = \sum_k w_k(c)\, T_k(c, t), \qquad
+    w_k(c) = \frac{1/\sigma_k^2(c)}{\sum_{k'} 1/\sigma_{k'}^2(c)}.
+  \]
+  ANCHORED is the same idea but uses UDel as a station proxy:
+  \[
+  w_k(c) \propto \frac{1}{\text{MSE}\bigl(T_k(c,\cdot),\, T_{\text{UDel}}(c,\cdot)\bigr)},
+  \qquad k \in \{\text{ERA5},\text{GMFD},\text{JRA-3Q},\text{MERRA2}\}.
+  \]
+\end{frame}
+
+\begin{frame}{OOS-OPT: why we dropped it}
+  A natural candidate: weights $w$ that minimise CV-MSE of the growth regression.
+  \vspace{0.3em}
+
+  We drew 500 weight vectors uniformly on the 5-simplex (Dirichlet(1,\ldots,1))
+  and evaluated CV-MSE at each:
+
+  \vspace{0.3em}
+  \centering
+  \small
+  \begin{tabular}{l r}
+    \toprule
+    min CV-MSE (random 10-fold) & 0.002714 \\
+    max CV-MSE                  & 0.002716 \\
+    relative spread             & \textbf{0.050\%} of mean \\
+    \bottomrule
+  \end{tabular}
+
+  \vspace{0.6em}
+  \footnotesize
+  The objective is essentially \emph{flat} over the simplex.  Any weights
+  give (statistically) the same predictive fit, so the argmin is not
+  identified. Honest conclusion: OOS-MSE cannot be used to select synthesis
+  weights on this data.
+\end{frame}
+
+% ===========================================================================
+\section{Evaluation framework}
+
+\begin{frame}{Three precision criteria, two stability criteria}
+  For each of 11 methods (5 raw + 6 synthetic) we report:
+
+  \vspace{0.4em}
+  \small
+  \begin{itemize}
+    \item \textbf{$\hat\beta_2$ magnitude} --- deattenuation check: removing
+          measurement error should make the quadratic coefficient more
+          negative.
+    \item \textbf{CI width on ME(25°C)} --- 95\% delta-method CI at the hot
+          tail, the quantity usually reported.
+    \item \textbf{t-statistic on $\hat\beta_2$} --- $|\hat\beta_2/\text{SE}|$,
+          the econometric measure of precision (signal-to-noise of the
+          coefficient).
+    \item \textbf{OOS MSE} on three CV splits (random 10-fold, leave-country,
+          leave-year) --- predictive fit.
+    \item \textbf{Jackknife stability}: rebuild each synthetic dropping one
+          dataset, measure the range of ME(25°C).
+  \end{itemize}
+\end{frame}
+
+% ===========================================================================
+\section{Results}
+
+\begin{frame}{ME curves, raw vs synthetic}
+  \centering
+  \includegraphics[width=\linewidth]{sc_me_curves.pdf}
+
+  \vspace{0.2em}
+  \footnotesize
+  Ribbons = 95\% delta-method CIs, clustered SE on country. Synthetics
+  cluster tightly; the raw panel shows more fanning, especially in the hot
+  tail.
+\end{frame}
+
+\begin{frame}{Headline table (ME at 25°C)}
+  \centering
+  \small
+  \begin{tabular}{l r r r r r}
+    \toprule
+    Method & $\hat\beta_2 \times 10^4$ & SE($\hat\beta_2$) $\times 10^4$
+           & $|t|$ & ME(25) & CI width \\
+    \midrule
+    \textit{Synthetic:} & & & & & \\
+    FACTOR      & $-6.28$ & 1.62 & \textbf{3.86} & $-0.0151$ & 0.0171 \\
+    PC1         & $-6.40$ & 1.67 & 3.83 & $-0.0149$ & 0.0170 \\
+    MEAN        & $-6.40$ & 1.68 & 3.82 & $-0.0149$ & 0.0170 \\
+    ANCHORED    & $-6.04$ & 1.59 & 3.80 & $-0.0142$ & 0.0161 \\
+    MEDIAN      & $-5.80$ & 1.66 & 3.50 & $-0.0131$ & 0.0166 \\
+    MIN-VAR     & $-4.95$ & 1.48 & 3.34 & $-0.0107$ & 0.0158 \\
+    \midrule
+    \textit{Raw:} & & & & & \\
+    JRA-3Q      & $-6.22$ & 1.63 & 3.81 & $-0.0161$ & 0.0165 \\
+    ERA5-025    & $-5.51$ & 1.46 & 3.79 & $-0.0127$ & 0.0147 \\
+    UDel        & $-5.17$ & 1.38 & 3.75 & $-0.0120$ & 0.0158 \\
+    GMFD        & $-6.43$ & 1.82 & 3.53 & $-0.0112$ & 0.0162 \\
+    MERRA2      & $-4.18$ & 1.41 & 2.97 & $-0.0073$ & 0.0138 \\
+    \bottomrule
+  \end{tabular}
+\end{frame}
+
+\begin{frame}{Coefficient plot: $\hat\beta_2$ with 95\% CI}
+  \centering
+  \includegraphics[height=0.75\textheight]{sc_coef_beta2.pdf}
+
+  \vspace{0.2em}
+  \footnotesize
+  Sorted descending in $\hat\beta_2$.  Synthetics (blue) cluster near
+  $-6\!\times\!10^{-4}$; raw datasets (grey) span from
+  $-4.2\!\times\!10^{-4}$ (MERRA2, attenuated) to $-6.4\!\times\!10^{-4}$ (GMFD).
+\end{frame}
+
+\begin{frame}{Coefficient plot: ME at 25°C with 95\% CI}
+  \centering
+  \includegraphics[height=0.75\textheight]{sc_coef_me25.pdf}
+
+  \vspace{0.2em}
+  \footnotesize
+  Same view on the ME at 25°C.  All synthetics and four of five raws reject
+  zero.  MERRA2 barely does.
+\end{frame}
+
+\begin{frame}{CI width: synthetics are \emph{wider}, but that's misleading}
+  \centering
+  \includegraphics[height=0.55\textheight]{sc_ci_width.pdf}
+
+  \vspace{0.2em}
+  \footnotesize
+  MERRA2 has the tightest CI on ME(25°C) --- but its $|\hat\beta_2|$ is
+  also the smallest ($4.2 \times 10^{-4}$ vs $6.4 \times 10^{-4}$ for MEAN).
+  Attenuation shrinks \emph{both} the coefficient \emph{and} its SE. The
+  right econometric comparison is the t-stat on $\hat\beta_2$.
+\end{frame}
+
+\begin{frame}{t-statistic: synthetics win on the right metric}
+  \small
+  Ranked by $|t_{\hat\beta_2}|$:
+
+  \vspace{0.4em}
+  \centering
+  \begin{tabular}{l r}
+    \toprule
+    FACTOR      & \textbf{3.86} \\
+    PC1         & 3.83 \\
+    MEAN        & 3.82 \\
+    JRA-3Q      & 3.81 \\
+    ANCHORED    & 3.80 \\
+    ERA5-025    & 3.79 \\
+    UDel        & 3.75 \\
+    GMFD        & 3.53 \\
+    MEDIAN      & 3.50 \\
+    MIN-VAR     & 3.34 \\
+    MERRA2      & 2.97 \\
+    \bottomrule
+  \end{tabular}
+
+  \vspace{0.4em}
+  \footnotesize
+  Top three are all synthetics (FACTOR, PC1, MEAN). Gain over best raw
+  is modest ($3.86$ vs $3.81$), gain over worst raw is large
+  ($3.86$ vs $2.97$).
+\end{frame}
+
+\begin{frame}{Why deattenuation works, quantitatively}
+  Classical measurement error in a regressor:
+  \[
+    \hat\beta \xrightarrow{p} \beta \cdot
+      \frac{\mathrm{Var}(T^*)}{\mathrm{Var}(T^*) + \mathrm{Var}(\eta)}
+  \]
+  Averaging $K$ independent measurements cuts $\mathrm{Var}(\eta)$ by $1/K$.
+  Errors aren't independent here, but residualised correlations 0.74--0.96
+  leave plenty of idiosyncratic component to average away.
+
+  \vspace{0.4em}
+
+  Empirically: raw MERRA2 $\hat\beta_2 = -4.2\!\times\!10^{-4}$ vs MEAN
+  $\hat\beta_2 = -6.4\!\times\!10^{-4}$. MEAN is \emph{50\% larger in
+  magnitude} --- exactly the pattern deattenuation predicts.
+\end{frame}
+
+\begin{frame}{OOS predictive fit is flat --- as expected}
+  \centering
+  \includegraphics[width=\linewidth]{sc_oos_mse.pdf}
+
+  \vspace{0.2em}
+  \footnotesize
+  All 11 methods give CV-MSE within 0.3\% of each other on all three splits.
+  Leave-country-out MSE is actually slightly \emph{lower} than random
+  10-fold (an artefact of the FWL leakage, symmetric across methods).
+  Bottom line: predictive fit cannot discriminate among these temperatures.
+\end{frame}
+
+\begin{frame}{Jackknife stability: leave-one-dataset-out}
+  \centering
+  \includegraphics[width=\linewidth]{sc_jackknife.pdf}
+
+  \vspace{0.2em}
+  \small
+  Range of ME(25°C) across the 5 jackknife folds:
+
+  \vspace{0.2em}
+  \centering
+  \small
+  \begin{tabular}{l r}
+    \toprule
+    FACTOR   & 0.00150 \\
+    MEAN     & 0.00164 \\
+    PC1      & 0.00170 \\
+    ANCHORED & 0.00197 \\
+    MEDIAN   & 0.00237 \\
+    MIN-VAR  & 0.00321 \\
+    \bottomrule
+  \end{tabular}
+
+  \vspace{0.2em}
+  \footnotesize
+  FACTOR is the most stable synthesis (smallest range); MIN-VAR is the
+  least, because inverse-variance weights shift sharply when one dataset
+  is removed.
+\end{frame}
+
+\begin{frame}{Factor-model measurement-error variances}
+  \centering
+  \includegraphics[width=0.82\linewidth]{sc_factor_sigma.pdf}
+
+  \vspace{0.2em}
+  \footnotesize
+  $\hat\sigma_k$ per dataset, pooled across 158 country-level factor fits.
+  ERA5 and JRA-3Q are nearly tied for cleanest weather signal
+  (median $\approx 0.06$°C); GMFD is the noisiest ($\approx 0.20$°C).
+  This is a model-based formalisation of the residual-correlation pattern
+  in the previous deck.
+\end{frame}
+
+% ===========================================================================
+\section{Synthesis behaviour in disagreeing countries}
+
+\begin{frame}{Where the synthesis has to work hardest}
+  Rank 158 countries by ensemble residualised MAD across all 10 pairs; take
+  the top 8. These are the countries where the reanalyses disagree most on
+  weather:
+  \vspace{0.4em}
+
+  \centering HTI, BDI, RWA, GRL, ARM, IRQ, GTM, ERI
+\end{frame}
+
+\begin{frame}{Raw temperatures (grey) + synthetics (colour), top-8 disagreement}
+  \centering
+  \includegraphics[height=0.85\textheight]{sc_spaghetti_raw.pdf}
+\end{frame}
+
+\begin{frame}{Same in residualised space (climate + trend partialled out)}
+  \centering
+  \includegraphics[height=0.85\textheight]{sc_spaghetti_resid.pdf}
+\end{frame}
+
+\begin{frame}{What the spaghetti plots show}
+  \begin{itemize}
+    \item In these most-disagreeing countries, the raw series fan out by
+          0.5--1.5\,°C in individual years (grey lines).
+    \item All synthetics track the central tendency of the fan, but they
+          \emph{differ} among themselves in the residualised space ---
+          especially FACTOR and MIN-VAR, which down-weight noisier datasets
+          and therefore follow the cleaner subset.
+    \item MEAN and PC1 are visually nearly identical and sit in the middle
+          of the fan, as their construction implies.
+    \item UDel-anchored pulls toward UDel in countries where UDel has good
+          station coverage, and away from it where it doesn't.
+  \end{itemize}
+\end{frame}
+
+% ===========================================================================
+\section{Recommendation}
+
+\begin{frame}{Recommendation}
+  \begin{enumerate}
+    \item \textbf{For the main specification: FACTOR.}
+          Best $t$-statistic on $\hat\beta_2$; lowest jackknife range;
+          yields measurement-error variance estimates as a by-product.
+    \item \textbf{For robustness: MEAN.}
+          0.1\% worse on t-stat, 9\% higher jackknife range than FACTOR,
+          but indistinguishable in practice and zero tuning.
+    \item \textbf{Report uncertainty bands across synthesis methods.}
+          The envelope of ME curves across synthetics is narrower than the
+          envelope across raw datasets --- a useful honest-uncertainty band
+          for the paper.
+    \item \textbf{Do \emph{not} use OOS MSE to select methods.} The
+          objective is flat.  Report OOS MSE as a sanity check on
+          predictive equivalence instead.
+    \item \textbf{Do \emph{not} over-interpret MIN-VAR.} Its weights are
+          noisy (per-country factor-model fit on 31 years), and its
+          jackknife instability shows it is not robust.
+  \end{enumerate}
+\end{frame}
+
+\begin{frame}{Caveats}
+  \begin{itemize}
+    \item \textbf{Correlated errors.} Our factor model assumes
+          $\mathrm{Cov}(\varepsilon_j, \varepsilon_k | F) = 0$.  With 5 datasets
+          and 31 years per country, we cannot reject this, but ERA5 and
+          JRA-3Q share ECMWF-style assimilation so this is strong.
+    \item \textbf{Residualisation leakage.} All methods use
+          full-sample residualisation for diagnostics. Symmetric across
+          methods, so rankings are unaffected; absolute $R^2_{\text{oos}}$
+          values are slightly optimistic.
+    \item \textbf{FWL under measurement error.} The classical deattenuation
+          formula assumes classical ME in a linear regression. Our
+          regression is quadratic, so the translation is approximate;
+          still, the observed $\hat\beta_2$ shift is in the direction
+          deattenuation predicts.
+    \item \textbf{Station benchmark.} ANCHORED uses UDel as a proxy for
+          ``station truth''. A proper station-anchored synthesis would use
+          Berkeley Earth or GHCN-Monthly; left as a clear follow-up.
+  \end{itemize}
+\end{frame}
+
+\end{document}
