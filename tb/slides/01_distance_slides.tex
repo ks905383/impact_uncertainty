@@ -1,0 +1,285 @@
+\documentclass[10pt,aspectratio=169]{beamer}
+
+% --- Minimal theme ---------------------------------------------------------
+\usetheme{default}
+\usecolortheme{dove}
+\usefonttheme{professionalfonts}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{footline}[frame number]
+\setbeamertemplate{itemize items}[circle]
+\setbeamertemplate{section in toc}[sections numbered]
+\setbeamerfont{frametitle}{size=\large,series=\bfseries}
+\setbeamercolor{frametitle}{fg=black}
+\setbeamercolor{title}{fg=black}
+\setbeamercolor{structure}{fg=black}
+\setbeamercolor{alerted text}{fg=black!80}
+
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{graphicx}
+\graphicspath{{../figs/}}
+
+\title{Comparing climate-damage estimates across reanalysis products}
+\subtitle{A scalar distance between marginal-effect curves, and where it comes from}
+\author{}
+\date{\today}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}{Outline}
+  \tableofcontents
+\end{frame}
+
+% ===========================================================================
+\section{Setup}
+
+\begin{frame}{The question}
+  \begin{itemize}
+    \item Same GDP-growth panel, same specification, five different gridded
+          temperature datasets: \textbf{ERA5-025, GMFD, JRA-3Q, MERRA2, UDel}.
+    \item Each delivers a marginal-effect (ME) curve of temperature on growth:
+      \[ \mathrm{ME}(T) \;=\; \beta_1 + 2\beta_2 T \]
+    \item \textbf{Question}: how different are the MEs across datasets, and
+          \emph{what drives} the difference?
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Data and specification}
+  \begin{itemize}
+    \item Balanced (iso, year) panel observed in every dataset:
+          \textbf{4{,}592 country-years}, 1980--2013.
+    \item Outcome: \texttt{growthWDI}. Regressors: temperature + temperature$^2$,
+          precipitation + precipitation$^2$.
+    \item Fixed effects: country, year, country-specific linear and quadratic
+          time trends. Standard errors clustered on country.
+  \end{itemize}
+\end{frame}
+
+% ===========================================================================
+\section{Marginal effects and their uncertainty}
+
+\begin{frame}{Delta-method marginal effects}
+  For $\mathrm{ME}(T) = \beta_1 + 2\beta_2 T$,
+  \[
+     \mathrm{Var}\bigl[\mathrm{ME}(T)\bigr]
+     \;=\; \mathrm{Var}(\beta_1)
+          + 4T^2\,\mathrm{Var}(\beta_2)
+          + 4T\,\mathrm{Cov}(\beta_1,\beta_2)
+  \]
+  with $\beta$ and $\mathrm{Var}(\beta)$ from the clustered \texttt{feols} fit.
+\end{frame}
+
+\begin{frame}{Marginal effects by dataset}
+  \centering
+  \includegraphics[width=\linewidth]{me_curves.pdf}
+
+  \vspace{0.3em}
+  \footnotesize
+  MERRA2 is visibly flatter than ERA5-025; others fall in between.
+\end{frame}
+
+% ===========================================================================
+\section{A scalar distance between two MEs}
+
+\begin{frame}{Integrated absolute difference}
+  \[
+    d(a,b)
+    \;=\;
+    \int \bigl|\mathrm{ME}_a(T)-\mathrm{ME}_b(T)\bigr|\, f_{a\cup b}(T)\,dT
+  \]
+  where $f_{a\cup b}$ is the empirical temperature distribution pooled across
+  the two models' samples. Estimated by Monte-Carlo --- a mean over the union
+  of the two sample-temp vectors.
+\end{frame}
+
+\begin{frame}{Pairwise L1 distance matrix}
+  \centering
+  \includegraphics[height=0.7\textheight]{distance_matrix.pdf}
+
+  \vspace{0.3em}
+  \footnotesize
+  The largest gap is \textbf{ERA5-025 vs MERRA2} (0.0035). The rest of the deck
+  asks: why?
+\end{frame}
+
+% ===========================================================================
+\section{Attribution via leave-one-out}
+
+\begin{frame}{LOO framework}
+  For each group $g$ (a continent, decade, or temperature decile):
+  \begin{enumerate}
+    \item Drop all rows with that group from the data.
+    \item Refit \emph{both} ERA5-025 and MERRA2 on the remainder.
+    \item Recompute the distance; compare to the full-sample distance.
+  \end{enumerate}
+  \vspace{0.3em}
+  A large drop means that group was driving the disagreement.
+\end{frame}
+
+\begin{frame}{Continent LOO}
+  \centering
+  \includegraphics[width=0.85\linewidth]{loo_continent.pdf}
+
+  \vspace{0.2em}
+  \footnotesize
+  Dashed line = full-sample distance. Dropping SEAS (South-East Asia) cuts the
+  gap almost in half. Dropping temperate continents (WEOFF, EECA) widens it.
+\end{frame}
+
+\begin{frame}{Decade LOO}
+  \centering
+  \includegraphics[width=0.85\linewidth]{loo_decade.pdf}
+
+  \vspace{0.2em}
+  \footnotesize
+  Roughly symmetric across MERRA2-covered decades --- no single decade
+  dominates. This is a steady-state disagreement.
+\end{frame}
+
+\begin{frame}{Temperature-decile LOO}
+  \centering
+  \includegraphics[width=0.85\linewidth]{loo_decile.pdf}
+
+  \vspace{0.2em}
+  \footnotesize
+  \textbf{The hot tail drives the gap.} Drop decile 10 alone and the distance
+  falls by 59\%. Dropping the cold tail widens it.
+\end{frame}
+
+% ===========================================================================
+\section{Explaining the gap}
+
+\begin{frame}{Three hypotheses}
+  \begin{description}
+    \item[H1] The two datasets disagree on \emph{temperature itself} ---
+              some systematic bias.
+    \item[H2] A handful of \emph{countries} carry the disagreement.
+    \item[H3] The hot-tail \emph{sample composition} differs because the two
+              reanalyses rank country-years differently.
+  \end{description}
+\end{frame}
+
+\begin{frame}{H1: temperatures agree very well overall}
+  \centering
+  \begin{tabular}{l r r r}
+    \toprule
+    correlation & mean bias & SD bias & MAD \\
+    \midrule
+    0.996 & 0.019 & 0.723 & 0.578 \\
+    \bottomrule
+  \end{tabular}
+
+  \vspace{0.8em}
+  \includegraphics[height=0.55\textheight]{temp_scatter.pdf}
+\end{frame}
+
+\begin{frame}{H1: but the bias pattern is not flat}
+  \centering
+  \includegraphics[width=0.85\linewidth]{temp_bias.pdf}
+
+  \vspace{0.2em}
+  \footnotesize
+  ERA5 is warmer than MERRA2 in the cold tail (+0.45\,\textdegree C, dec.\ 1)
+  and cooler in the middle ($-0.37$\,\textdegree C, dec.\ 7). The distributions
+  are mildly compressed relative to each other.
+\end{frame}
+
+\begin{frame}{H2: leave-one-country-out --- a few tropical countries dominate}
+  Top 5 countries (removing each reduces the gap most):
+
+  \vspace{0.5em}
+  \centering
+  \begin{tabular}{l r r}
+    \toprule
+    Country & LOO distance & Reduction \\
+    \midrule
+    SLE (Sierra Leone)   & 0.00259 & \textbf{+0.00087} \\
+    PNG (Papua N.\ G.)   & 0.00303 & +0.00043 \\
+    TCD (Chad)           & 0.00306 & +0.00040 \\
+    COG (Congo)          & 0.00307 & +0.00039 \\
+    AGO (Angola)         & 0.00307 & +0.00039 \\
+    \bottomrule
+  \end{tabular}
+
+  \vspace{0.6em}
+  \footnotesize
+  Sierra Leone alone explains 25\% of the gap.
+\end{frame}
+
+\begin{frame}{H2: Sierra Leone --- temp series by dataset}
+  \centering
+  \includegraphics[width=0.85\linewidth]{sle_temp.pdf}
+\end{frame}
+
+\begin{frame}{H3: different country-years land in the hot tail}
+  Pooled top temp decile, by dataset:
+
+  \vspace{0.5em}
+  \centering
+  \begin{tabular}{l r r r}
+    \toprule
+    Dataset   & N  & Mean temp & Mean growth \\
+    \midrule
+    ERA5-025  & 445 & 27.9 & 0.70\% \\
+    MERRA2    & 401 & 27.7 & 0.58\% \\
+    \bottomrule
+  \end{tabular}
+
+  \vspace{0.6em}
+  \footnotesize
+  \textbf{140 (iso, year) pairs} are top-decile in one dataset but not the
+  other. The two hot-tail subsamples contain partly different country-years,
+  with different mean growth. This nudges the fitted quadratic at high $T$ in
+  different directions.
+\end{frame}
+
+\begin{frame}{How much of the gap does H3 explain?}
+  Drop the 140 hot-tail-disagreement pairs and refit:
+
+  \vspace{0.5em}
+  \centering
+  \begin{tabular}{l r}
+    \toprule
+    & L1 distance \\
+    \midrule
+    Full balanced sample         & 0.00346 \\
+    After dropping disagreements & 0.00310 \\
+    \midrule
+    Reduction                    & 0.00036 ($\approx$ 10\%) \\
+    \bottomrule
+  \end{tabular}
+
+  \vspace{0.8em}
+  \footnotesize
+  Hot-tail reranking is \emph{part} of the story but not the whole thing. The
+  rest looks like classical measurement error: even same-$T$ observations
+  differ by MAD 0.58\,\textdegree C between datasets, and those small
+  perturbations in the right-hand-side variable move $\beta_2$ enough to
+  matter.
+\end{frame}
+
+% ===========================================================================
+\section{Takeaways}
+
+\begin{frame}{Takeaways}
+  \begin{itemize}
+    \item Datasets with $r=0.996$ on temperature can still produce noticeably
+          different climate-damage MEs, concentrated in the hot tail.
+    \item Sources of the ERA5-025 vs MERRA2 gap:
+      \begin{enumerate}
+        \item Small temperature perturbations amplified by the quadratic
+              specification ($\sim$90\%).
+        \item Reranking of country-years into the hot-tail sample ($\sim$10\%).
+      \end{enumerate}
+    \item A few tropical countries --- especially Sierra Leone --- carry
+          disproportionate weight.
+    \item Practical implication: for damage functions that hinge on the hot
+          tail, the choice of reanalysis is \emph{not} innocuous.
+  \end{itemize}
+\end{frame}
+
+\end{document}
