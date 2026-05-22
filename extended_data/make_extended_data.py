@@ -59,9 +59,9 @@ import geopandas as gpd
 # ---------------------------------------------------------------------------
 
 DROPBOX = Path(os.environ.get(
-    "KS_DROPBOX", "/Users/tombearpark/Library/CloudStorage/Dropbox/ks"))
+    "KS_DROPBOX", "/glade/derecho/scratch/schwarzwald/impact_uncertainty/"))
 REPO    = Path(os.environ.get(
-    "KS_REPO",    "/Users/tombearpark/Documents/GitHub/impact_uncertainty"))
+    "KS_REPO",    "/glade/u/home/schwarzwald/projects/impact_uncertainty"))
 
 REG_INPUT = DROPBOX / "reg_inputs"  / "gdppc" / "reginputs_gdppc_025deg.csv"
 FULL_DIR  = DROPBOX / "reg_outputs" / "gdppc"
@@ -121,14 +121,16 @@ _LOO_RE  = re.compile(
     r"^regoutputs_coeffs_gdppc_025deg_(?P<rea>[^_]+)_1980-2010_no(?P<country>.+)\.csv$")
 
 
-def load_panel() -> pd.DataFrame:
+def load_panel(drop_oosamp = True) -> pd.DataFrame:
     """BHM regression-input panel, balanced across the 4 main reanalyses."""
     use = ["countryname", "iso", "year", "obs_mod", "temp_popweight", "Pop",
-           "growthWDI", "time", "time2", "gdpCAPppp_wdi"]
+           "growthWDI", "time", "time2", "gdpCAPppp_wdi","og_insamp"]
     df = pd.read_csv(REG_INPUT, usecols=use)
     df = df[(df["year"] >= YEAR_LO) & (df["year"] <= YEAR_HI)]
     df = df[df["obs_mod"].isin(REANALYSES)]
     df = df.dropna(subset=["temp_popweight"])
+     # Drop locs not in the original sample
+    df = df.where(df.og_insamp).dropna(how='all')
     # Require every reanalysis to observe each (iso, year)
     counts = df.groupby(["iso", "year"])["obs_mod"].nunique().reset_index()
     keep = counts[counts["obs_mod"] == len(REANALYSES)][["iso", "year"]]
