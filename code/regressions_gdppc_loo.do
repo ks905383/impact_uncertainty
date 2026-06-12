@@ -15,6 +15,9 @@ local degstr 025deg
 
 
 import delimited "`data_dir'/reginputs_gdppc_`degstr'.csv", clear
+
+keep if og_insamp=="True"
+
 encode iso_id, gen(iso_id_)
 gen temp = temp_popweight
 gen precip = precip_popweight
@@ -37,6 +40,7 @@ local yrlabel = string(`first') + "-" + string(`last')
 
 * Get label for countries
 levelsof countryname, local(reg_ids)
+
 
 foreach mod of local mods {
 	foreach reg_ of local reg_ids { 
