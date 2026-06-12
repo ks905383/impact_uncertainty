@@ -2,6 +2,7 @@ import xarray as xr
 import pandas as pd
 import geopandas as gpd
 import numpy as np
+import re
 from matplotlib import patches as mpatches
 from matplotlib import pyplot as plt
 import matplotlib as mpl
@@ -44,7 +45,7 @@ def plot_dmgfs(dmgf,proc,ax=None,
                         plot_data.quantile(0.025,dim='sidx'),
                         plot_data.quantile(0.975,dim='sidx'),
                         color=colors[proj_base],alpha=0.1)
-        plot_data.mean('sidx').plot(color=colors[proj_base],linewidth=1,label=proj_base,ax=ax)
+        plot_data.mean('sidx').plot(color=colors[proj_base],linewidth=1,label=re.sub(r'MERRA2','MERRA-2',proj_base),ax=ax)
     
     
     ax.set_xlim(proc_xlims[proc])
@@ -60,7 +61,7 @@ def plot_dmgfs(dmgf,proc,ax=None,
         ax.set_title('')
     else:    
         ax.set_xlabel(r'Temperature')# [$^\circ$C]')
-        ax.set_ylabel('Change in '+proc_names[proc])
+        ax.set_ylabel(proc_names[proc])
         ax.set_title('Impact of day at T on\n'+proc_titles[proc])
 
     ax.axhline(0,color='k',linewidth=1)

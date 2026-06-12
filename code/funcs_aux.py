@@ -221,7 +221,7 @@ def _restore_doys(ds,params_proc):
     '''
     # Subset to the 365 days actually processed 
     ds = ds.isel(dayofyear=slice(int(params_proc['wwidth']/2),-int(params_proc['wwidth']/2)))
-    doys = ds['dayofyear'].values
+    doys = ds['dayofyear'].values.copy()
     doys[doys>365] = doys[doys>365] % 365
     ds['dayofyear'] = doys
     ds = ds.sortby('dayofyear')
