@@ -16,22 +16,32 @@ from funcs_support import get_filepaths,get_params,utility_save
 dir_list = get_params()
 
 
-def coeffs_gdppc(obstreat='sep',resolution='025deg',timeframe='1980-2010',return_raw = False,joint_=False,get_loos=False):
+def coeffs_gdppc(obstreat='sep',resolution='025deg',timeframe='1980-2010',return_raw = False,joint_=False,get_loos=False,get_crossprs=False):
 
     # Get relevant filenames
     if get_loos:
         fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'gdppc/loos/reg*.csv'))})
+    elif get_crossprs:
+        fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'gdppc/crossprs/reg*.csv'))})
     else:    
         fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'gdppc/reg*.csv'))})
     
     # Extract properties
     fns['datatype'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[1])[0] for fn in fns.path.values]
     fns['resolution'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[3])[0] for fn in fns.path.values]
-    fns['proj_base'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[4])[0] for fn in fns.path.values]
-    fns['timeframe'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[5])[0] for fn in fns.path.values]
+    if get_crossprs:
+        fns['proj_base'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[4])[0][4:None] for fn in fns.path.values]
+        fns['proj_base_pr'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[5])[0][3:None] for fn in fns.path.values]
+        fns['timeframe'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[6])[0] for fn in fns.path.values]
+    else:
+        fns['proj_base'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[4])[0] for fn in fns.path.values]
+        fns['timeframe'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[5])[0] for fn in fns.path.values]
     fns['obstreat'] = ['joint' if re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[-1])[0]=='JOINT' else 'sep' for fn in fns.path.values]
-
+    
     index_cols = ['proj_base','resolution','timeframe','obstreat','datatype']
+    
+    if get_crossprs:
+        index_cols.append('proj_base_pr')
 
     if get_loos:
         fns['loo_id'] = [[n for n in re.split(r'\_',re.split(r'\/',fn)[-1]) if re.search(r'^no.*\.csv$',n)][0][2:-4]
@@ -122,13 +132,17 @@ def coeffs_gdppc(obstreat='sep',resolution='025deg',timeframe='1980-2010',return
         coeffs_out,vcv_out = outputs['coeffs'],outputs['vcv']
     
     # Turn ERA5-025 into ERA5
-    coeffs_out['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in coeffs_out.proj_base.values]
-    if 'proj_base_1' in vcv_out.sizes:
-        for k in [1,2]:
-            vcv_out[f'proj_base_{str(k)}'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv_out[f'proj_base_{str(k)}'].values]
-    else:
-        vcv_out['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv_out.proj_base.values]
-    
+    namefix_list = ['proj_base']
+    if get_crossprs:
+        namefix_list.append('proj_base_pr')
+        
+    for var in namefix_list:                
+        coeffs_out[var] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in coeffs_out[var].values]
+        if var+'_1' in vcv_out.sizes:
+            for k in [1,2]:
+                vcv_out[f'{var}_{str(k)}'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv_out[f'{var}_{str(k)}'].values]
+        else:
+            vcv_out[var] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv_out[var].values]
         
     if not return_raw:
         coeffs_out = coeffs_out.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe)
@@ -139,7 +153,7 @@ def coeffs_gdppc(obstreat='sep',resolution='025deg',timeframe='1980-2010',return
 
 
 def coeffs_mortality(obstreat='sep',resolution='025deg',timeframe='1980-2010',spec='pooled',indflag='noInd',
-                     return_raw = False,joint_=False,get_loos = False):
+                     return_raw = False,joint_=False,get_loos = False,get_crossprs = False):
 
 
 
@@ -181,6 +195,8 @@ def coeffs_mortality(obstreat='sep',resolution='025deg',timeframe='1980-2010',sp
     # Get relevant filenames
     if get_loos:
         fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'mortality/loos/reg*.csv'))})
+    elif get_crossprs:
+        fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'mortality/crossprs/reg*.csv'))})
     else:    
         fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'mortality/reg*.csv'))})
     
@@ -188,12 +204,20 @@ def coeffs_mortality(obstreat='sep',resolution='025deg',timeframe='1980-2010',sp
     fns['datatype'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[1])[0] for fn in fns.path.values]
     fns['spec'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[3])[0] for fn in fns.path.values]
     fns['resolution'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[4])[0] for fn in fns.path.values]
-    fns['proj_base'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[5])[0] for fn in fns.path.values]
-    fns['timeframe'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[6])[0] for fn in fns.path.values]
+    if get_crossprs:
+        fns['proj_base'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[5])[0][4:None] for fn in fns.path.values]
+        fns['proj_base_pr'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[6])[0][3:None] for fn in fns.path.values]
+        fns['timeframe'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[7])[0] for fn in fns.path.values]
+    else:
+        fns['proj_base'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[5])[0] for fn in fns.path.values]
+        fns['timeframe'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[6])[0] for fn in fns.path.values]
     fns['obstreat'] = [re.split(r'\_',re.search(r'\_JOINT.*[\.\_]',fn).group()[1:-1].lower())[0] if 'JOINT' in fn else 'sep' for fn in fns.path.values]
     fns['indflag'] = ['noInd' if 'noIND' in fn else 'wInd' for fn in fns.path.values]
-    
+
     index_cols = ['proj_base','resolution','timeframe','obstreat','spec','indflag','datatype']
+
+    if get_crossprs:
+        index_cols.append('proj_base_pr')
 
     if get_loos:
         fns['loo_id'] = [[n for n in re.split(r'\_',re.split(r'\/',fn)[-1]) if re.search(r'^no.*\.csv$',n)][0][2:-4]
@@ -307,15 +331,20 @@ def coeffs_mortality(obstreat='sep',resolution='025deg',timeframe='1980-2010',sp
     else:
         coeffs_out,vcv_out = outputs['coeffs'],outputs['vcv']
 
-    # Turn ERA5-025 into ERA5
-    coeffs_out['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in coeffs_out.proj_base.values]
-    if 'proj_base_1' in vcv_out.sizes:
-        for k in [1,2]:
-            vcv_out[f'proj_base_{str(k)}'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv_out[f'proj_base_{str(k)}'].values]
-    else:
-        vcv_out['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv_out.proj_base.values]
 
+    # Turn ERA5-025 into ERA5
+    namefix_list = ['proj_base']
+    if get_crossprs:
+        namefix_list.append('proj_base_pr')
         
+    for var in namefix_list:                
+        coeffs_out[var] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in coeffs_out[var].values]
+        if var+'_1' in vcv_out.sizes:
+            for k in [1,2]:
+                vcv_out[f'{var}_{str(k)}'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv_out[f'{var}_{str(k)}'].values]
+        else:
+            vcv_out[var] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv_out[var].values]
+    
     if not return_raw:
         coeffs_out = coeffs_out.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,spec=spec,indflag=indflag)
         vcv_out= vcv_out.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,spec=spec,indflag=indflag)
@@ -325,25 +354,33 @@ def coeffs_mortality(obstreat='sep',resolution='025deg',timeframe='1980-2010',sp
 
 def coeffs_payroll(obstreat='sep',resolution='025deg',timeframe='1986-2008',weighting='pop',
                    joint_ = False,
-                     return_raw = False,get_loos=False):
+                     return_raw = False,get_loos=False,get_crossprs=False):
     
     # ---- Get filepaths of regression output csvs
     # Get relevant filenames
     if get_loos:
         fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'payroll/loos/reg*.csv'))})
+    elif get_crossprs:
+        fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'payroll/crossprs/reg*.csv'))})
     else:    
         fns = pd.DataFrame({'path':np.sort(glob.glob(dir_list['regs']+'payroll/reg*.csv'))})
     
     fns['datatype'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[1])[0] for fn in [re.sub(r'pooled\_','',fn) for fn in [re.sub(r'pooled\_','',fn) for fn in fns.path.values]]]
     fns['weighting'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[4])[0] for fn in [re.sub(r'pooled\_','',fn) for fn in [re.sub(r'pooled\_','',fn) for fn in fns.path.values]]]
     fns['resolution'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[3])[0] for fn in [re.sub(r'pooled\_','',fn) for fn in [re.sub(r'pooled\_','',fn) for fn in fns.path.values]]]
-    fns['proj_base'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[5])[0] for fn in [re.sub(r'pooled\_','',fn) for fn in [re.sub(r'pooled\_','',fn) for fn in fns.path.values]]]
-    fns['timeframe'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[6])[0] for fn in [re.sub(r'pooled\_','',fn) for fn in [re.sub(r'pooled\_','',fn) for fn in fns.path.values]]]
+    if get_crossprs:
+        fns['proj_base'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[5])[0][4:None] for fn in [re.sub(r'pooled\_','',fn) for fn in [re.sub(r'pooled\_','',fn) for fn in fns.path.values]]]
+        fns['proj_base_pr'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[6])[0][3:None] for fn in [re.sub(r'pooled\_','',fn) for fn in [re.sub(r'pooled\_','',fn) for fn in fns.path.values]]]
+        fns['timeframe'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[7])[0] for fn in [re.sub(r'pooled\_','',fn) for fn in [re.sub(r'pooled\_','',fn) for fn in fns.path.values]]]
+    else:
+        fns['proj_base'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[5])[0] for fn in [re.sub(r'pooled\_','',fn) for fn in [re.sub(r'pooled\_','',fn) for fn in fns.path.values]]]
+        fns['timeframe'] = [re.split(r'\.csv',re.split(r'\_',re.split(r'\/',fn)[-1])[6])[0] for fn in [re.sub(r'pooled\_','',fn) for fn in [re.sub(r'pooled\_','',fn) for fn in fns.path.values]]]
     fns['obstreat'] = [re.split(r'\_',re.search(r'\_JOINT.*[\.\_]',fn).group()[1:-1].lower())[0] if 'JOINT' in fn else 'sep' for fn in [re.sub(r'pooled\_','',fn) for fn in fns.path.values]]
     # NB: the replacement of "pooled" is due to an issue with the filenames in the VCVs, which incorrectly have "pooled" in them as a consequence of a copy-paste issue. 
     
     index_cols = ['proj_base','resolution','timeframe','obstreat','weighting','datatype']
-
+    if get_crossprs:
+        index_cols.append('proj_base_pr')
     if get_loos:
         fns['loo_id'] = [[n for n in re.split(r'\_',re.split(r'\/',fn)[-1]) if re.search(r'^no.*\.csv$',n)][0][2:-4]
                         for fn in [re.sub(r'pooled\_','',fn) for fn in fns.path.values]]
@@ -442,13 +479,18 @@ def coeffs_payroll(obstreat='sep',resolution='025deg',timeframe='1986-2008',weig
         coeffs_out,vcv_out = outputs['coeffs'],outputs['vcv']
     
     # Turn ERA5-025 into ERA5
-    coeffs_out['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in coeffs_out.proj_base.values]
-    if 'proj_base_1' in vcv_out.sizes:
-        for k in [1,2]:
-            vcv_out[f'proj_base_{str(k)}'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv_out[f'proj_base_{str(k)}'].values]
-    else:
-        vcv_out['proj_base'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv_out.proj_base.values]
-    
+    namefix_list = ['proj_base']
+    if get_crossprs:
+        namefix_list.append('proj_base_pr')
+        
+    for var in namefix_list:                
+        coeffs_out[var] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in coeffs_out[var].values]
+        if var+'_1' in vcv_out.sizes:
+            for k in [1,2]:
+                vcv_out[f'{var}_{str(k)}'] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv_out[f'{var}_{str(k)}'].values]
+        else:
+            vcv_out[var] = [re.sub(r'^ERA5-025$','ERA5',mod) for mod in vcv_out[var].values]
+        
         
     if not return_raw:
         coeffs_out = coeffs_out.sel(obstreat=obstreat,resolution=resolution,timeframe=timeframe,weighting=weighting)

@@ -21,9 +21,10 @@ local data_dir "/shared/share_hle/data/reg_inputs/payroll/"
 local output_dir "/shared/share_hle/data/reg_outputs/payroll/"
 
 global DO_MAIN 1
-global DO_MAIN_JOINT 1 
+global DO_MAIN_JOINT 1
 
 local degstrs 025deg 1deg
+local main_mods `" "ERA5-025" "MERRA2" "JRA-3Q" "GMFD" "PRISM" "'
 
 if $DO_MAIN {
     foreach wght in "raw" "pop" {
@@ -38,19 +39,19 @@ if $DO_MAIN {
             * Get names of obs_mods
             levelsof obs_mod, local(mods)
 
-            * Get joint years
+            * --- Get joint years
             local total = r(r)
             bysort year (obs_mod): gen tag = (obs_mod != obs_mod[_n-1]) | _n == 1
             bysort year: egen n_present = total(tag)
         
             * Get label for filenames
-            levelsof year, local(yrs)
-            local first : word 1 of `yrs'
-            local n = wordcount("`yrs'")
-            local last : word `n' of `yrs'
+            levelsof year if n_present == `total', local(jointyrs)
+            local first : word 1 of `jointyrs'
+            local n = wordcount("`jointyrs'")
+            local last : word `n' of `jointyrs'
             local yrlabel = string(`first') + "-" + string(`last')
 
-            * Pre-compute mod_n for each mod (before any preserve/clear)
+            * --- Pre-compute mod_n for each mod (before any preserve/clear)
             * (get "clean" version of the names to avoid STATA syntax issues
             * from dashes)
             encode obs_mod, gen(obs_mod_)
@@ -65,6 +66,7 @@ if $DO_MAIN {
 
                 * ---- Separate regressions per obs_mod
                 foreach mod of local mods {
+		    di "Processing `mod'..."
                     preserve
                         keep if obs_mod == "`mod'"
 
@@ -97,127 +99,142 @@ if $DO_MAIN {
 
                         clear
                         svmat V, name(col)
-                        outsheet using "`output_dir'/regoutputs_vcv_payroll_pooled_`degstr'_`wght'`suffix'.csv", comma replace
+                        outsheet using "`output_dir'/regoutputs_vcv_payroll_`degstr'_`wght'`suffix'.csv", comma replace
+			
+			if "`degstr'" == "025deg" {
+			    if "`wght'" == "pop" {
+			       parmest, idstr("`mod'") dof(`e(df_r)') saving("`output_dir'/regoutputs_payroll_`degstr'`suffix'.dta", replace)
+			    }
+			}
 
                     restore
                 }
-
+			
                 * ---- Joint regression, only for jointyrs
-                if "`yeartyp'" == "jointyrs" {
-                    preserve
-                        keep if n_present == `total'
+		if $DO_MAIN_JOINT {
+			if ("`yeartyp'" == "jointyrs") {
+			    di "Running joint regression..."
+			    preserve
+				keep if n_present == `total'
+				
+				* Keep only the "main" mods for joint regression
+				keep if inlist(obs_mod, "ERA5-025", "JRA-3Q", "MERRA2", "GMFD", "PRISM")
 
-                        reghdfe lny_nonag c.(days90plus fnd_85to90 fnd_80to85 `a_dry')#i.obs_mod_ ///
-                                , absorb(i.fips#i.obs_mod_ i.year#i.obs_mod_ i.state#c.year#i.obs_mod_) cluster(i.fips)
+				reghdfe lny_nonag c.(days90plus fnd_85to90 fnd_80to85 `a_dry')#i.obs_mod_ ///
+					, absorb(i.fips#i.obs_mod_ i.year#i.obs_mod_ i.state#c.year#i.obs_mod_) cluster(i.fips)
 
-                        mat b_JOINT = e(b)
-                        local last : word `=colsof(b_JOINT)' of `:colnames b_JOINT'
-                        if "`last'" == "_cons" mat b_JOINT = b_JOINT[1, 1..`=colsof(b_JOINT)-1']
+				mat b_JOINT = e(b)
+				local last : word `=colsof(b_JOINT)' of `:colnames b_JOINT'
+				if "`last'" == "_cons" mat b_JOINT = b_JOINT[1, 1..`=colsof(b_JOINT)-1']
 
-                        mat V_JOINT = e(V)
-                        local last : word `=colsof(V_JOINT)' of `:colnames V_JOINT'
-                        if "`last'" == "_cons" {
-                            local n = colsof(V_JOINT) - 1
-                            mat V_JOINT = V_JOINT[1..`n', 1..`n']
-                        }
+				mat V_JOINT = e(V)
+				local last : word `=colsof(V_JOINT)' of `:colnames V_JOINT'
+				if "`last'" == "_cons" {
+				    local n = colsof(V_JOINT) - 1
+				    mat V_JOINT = V_JOINT[1..`n', 1..`n']
+				}
 
-                        * ---- Save per-mod coefficients and block-diagonal VCVs
-                        foreach mod of local mods {
-                            local mod_clean = subinstr("`mod'", "-", "_", .)
-                            local mod_n = `mod_n_`mod_clean''
-                            local modsuffix "_`mod'_`yrlabel'_JOINT"
+				* ---- Save per-mod coefficients and block-diagonal VCVs
+				di "Saving single-model coefficients..."
+				foreach mod of local main_mods {
+				    local mod_clean = subinstr("`mod'", "-", "_", .)
+				    local mod_n = `mod_n_`mod_clean''
+				    local modsuffix "_`mod'_`yrlabel'_JOINT"
+				    * di "chkpt 1"
+				    * Build list of all column names for this mod
+				    local modcols ""
+				    local allcols : colnames b_JOINT
+				    local ncols = colsof(b_JOINT)
+				    forvalues k = 1/`ncols' {
+					local col1 : word `k' of `allcols'
+					if regexm("`col1'", "^`mod_n'[b]?\.obs\_mod\_\#") {
+					    local modcols "`modcols' `col1'"
+					}
+				    }
+				    * di "chkpt 2"
+				    * Extract b
+				    local firstcol : word 1 of `modcols'
+				    mat b_mod = b_JOINT[1, "`firstcol'"]
+				    local nc = wordcount("`modcols'")
+				    forvalues k = 2/`nc' {
+					local col1 : word `k' of `modcols'
+					mat b_mod = b_mod, b_JOINT[1, "`col1'"]
+				    }
+				    * di "chkpt 3"
+				    * Extract block-diagonal V
+				    local nc = wordcount("`modcols'")
+				    mat V_mod = J(`nc', `nc', 0)
+				    forvalues i = 1/`nc' {
+					forvalues j = 1/`nc' {
+					    local ci : word `i' of `modcols'
+					    local cj : word `j' of `modcols'
+					    mat V_mod[`i', `j'] = V_JOINT["`ci'", "`cj'"]
+					}
+				    }
+				    * di "chkpt 4"
+				    local cols : colnames b_mod
+				    local newcols ""
+				    local ncols = colsof(b_mod)
+				    forvalues k = 1/`ncols' {
+					local col : word `k' of `cols'
+					* Alles nach "#c." extrahieren
+					local col_clean = regexr("`col'", ".*#c\.", "")
+					local newcols "`newcols' `col_clean'"
+				    }
+				    mat colnames b_mod = `newcols'
+				    mat colnames V_mod = `newcols'
+				    mat rownames V_mod = `newcols'
+			            * di "chkpt 5"
+				    clear
+				    svmat b_mod, name(col)
+				    outsheet using "`output_dir'/regoutputs_coeffs_payroll_`degstr'_`wght'`modsuffix'.csv", comma replace
 
-                            * Build list of all column names for this mod
-                            local modcols ""
-                            local allcols : colnames b_JOINT
-                            local ncols = colsof(b_JOINT)
-                            forvalues k = 1/`ncols' {
-                                local col1 : word `k' of `allcols'
-                                if regexm("`col1'", "^`mod_n'[b]?\.obs\_mod\_\#") {
-                                    local modcols "`modcols' `col1'"
-                                }
-                            }
+				    clear
+				    svmat V_mod, name(col)
+				    outsheet using "`output_dir'/regoutputs_vcv_payroll_`degstr'_`wght'`modsuffix'.csv", comma replace
+				}
 
-                            * Extract b
-                            local firstcol : word 1 of `modcols'
-                            mat b_mod = b_JOINT[1, "`firstcol'"]
-                            local nc = wordcount("`modcols'")
-                            forvalues k = 2/`nc' {
-                                local col1 : word `k' of `modcols'
-                                mat b_mod = b_mod, b_JOINT[1, "`col1'"]
-                            }
+				* ---- Save full joint VCV
+				di "Saving full VCV..."
+				* Have to change the naems of the rows / columns, since STATA can't put "." or "#" into CSV headers for some reason
+				local cols : colnames b_JOINT
+				local newcols ""
+				local ncols = colsof(b_JOINT)
+				forvalues k = 1/`ncols' {
+				    local col : word `k' of `cols'
 
-                            * Extract block-diagonal V
-                            local nc = wordcount("`modcols'")
-                            mat V_mod = J(`nc', `nc', 0)
-                            forvalues i = 1/`nc' {
-                                forvalues j = 1/`nc' {
-                                    local ci : word `i' of `modcols'
-                                    local cj : word `j' of `modcols'
-                                    mat V_mod[`i', `j'] = V_JOINT["`ci'", "`cj'"]
-                                }
-                            }
+				    * Replace mod encoded number with mod name
+				    foreach mod of local main_mods {
+					local mod_clean = subinstr("`mod'", "-", "_", .)
+					local mod_n = `mod_n_`mod_clean''
+					if regexm("`col'", "^`mod_n'[b]?\.obs\_mod\_\#c\.(.+)$") {
+					    local varname = regexs(1)
+					    local col = "`mod_clean'_`varname'"
+					}
+				    }
 
-                            local cols : colnames b_mod
-                            local newcols ""
-                            local ncols = colsof(b_mod)
-                            forvalues k = 1/`ncols' {
-                                local col : word `k' of `cols'
-                                * Alles nach "#c." extrahieren
-                                local col_clean = regexr("`col'", ".*#c\.", "")
-                                local newcols "`newcols' `col_clean'"
-                            }
-                            mat colnames b_mod = `newcols'
-                            mat colnames V_mod = `newcols'
-                            mat rownames V_mod = `newcols'
+				    local col_clean = subinstr("`col'", ".", "_", .)
+				    local col_clean = subinstr("`col_clean'", "#", "_", .)
+				    local col_clean = subinstr("`col_clean'", " ", "_", .)
+				    local newcols "`newcols' `col_clean'"
+				}
+				mat colnames b_JOINT = `newcols'
+				mat rownames V_JOINT = `newcols'
+				mat colnames V_JOINT = `newcols'
 
-                            clear
-                            svmat b_mod, name(col)
-                            outsheet using "`output_dir'/regoutputs_coeffs_payroll_`degstr'_`wght'`modsuffix'.csv", comma replace
+				clear
+				svmat V_JOINT, name(col)
+				outsheet using "`output_dir'/regoutputs_vcv_payroll_`degstr'_`wght'_ALLREA_`yrlabel'_JOINT.csv", comma replace
 
-                            clear
-                            svmat V_mod, name(col)
-                            outsheet using "`output_dir'/regoutputs_vcv_payroll_pooled_`degstr'_`wght'`modsuffix'.csv", comma replace
-                        }
+				* ---- Save full joint b
+				clear
+				svmat b_JOINT, name(col)
+				outsheet using "`output_dir'/regoutputs_coeffs_payroll_`degstr'_`wght'_ALLREA_`yrlabel'_JOINT.csv", comma replace
 
-                        * ---- Save full joint VCV
-                        * Have to change the naems of the rows / columns, since STATA can't put "." or "#" into CSV headers for some reason
-                        local cols : colnames b_JOINT
-                        local newcols ""
-                        local ncols = colsof(b_JOINT)
-                        forvalues k = 1/`ncols' {
-                            local col : word `k' of `cols'
-
-                            * Replace mod encoded number with mod name
-                            foreach mod of local mods {
-                                local mod_clean = subinstr("`mod'", "-", "_", .)
-                                local mod_n = `mod_n_`mod_clean''
-                                if regexm("`col'", "^`mod_n'[b]?\.obs\_mod\_\#c\.(.+)$") {
-                                    local varname = regexs(1)
-                                    local col = "`mod_clean'_`varname'"
-                                }
-                            }
-
-                            local col_clean = subinstr("`col'", ".", "_", .)
-                            local col_clean = subinstr("`col_clean'", "#", "_", .)
-                            local col_clean = subinstr("`col_clean'", " ", "_", .)
-                            local newcols "`newcols' `col_clean'"
-                        }
-                        mat colnames b_JOINT = `newcols'
-                        mat rownames V_JOINT = `newcols'
-                        mat colnames V_JOINT = `newcols'
-
-                        clear
-                        svmat V_JOINT, name(col)
-                        outsheet using "`output_dir'/regoutputs_vcv_payroll_pooled_`degstr'_`wght'_ALLREA_`yrlabel'_JOINT.csv", comma replace
-
-                        * ---- Save full joint b
-                        clear
-                        svmat b_JOINT, name(col)
-                        outsheet using "`output_dir'/regoutputs_coeffs_payroll_`degstr'_`wght'_ALLREA_`yrlabel'_JOINT.csv", comma replace
-
-                    restore
-                }
+			    restore
+			}
+		    
+		}
             }
         }
     }

@@ -40,12 +40,13 @@ def plot_dmgfs(dmgf,proc,ax=None,
         ax = plt.subplot()
     
     for proj_base in dmgf.proj_base.values:
-        plot_data = dmgf.sel(proj_base = proj_base)
-        ax.fill_between(plot_data.Tref,
-                        plot_data.quantile(0.025,dim='sidx'),
-                        plot_data.quantile(0.975,dim='sidx'),
-                        color=colors[proj_base],alpha=0.1)
-        plot_data.mean('sidx').plot(color=colors[proj_base],linewidth=1,label=re.sub(r'MERRA2','MERRA-2',proj_base),ax=ax)
+        if proj_base in colors:
+            plot_data = dmgf.sel(proj_base = proj_base)
+            ax.fill_between(plot_data.Tref,
+                            plot_data.quantile(0.025,dim='sidx'),
+                            plot_data.quantile(0.975,dim='sidx'),
+                            color=colors[proj_base],alpha=0.1)
+            plot_data.mean('sidx').plot(color=colors[proj_base],linewidth=1,label=re.sub(r'MERRA2','MERRA-2',proj_base),ax=ax)
     
     
     ax.set_xlim(proc_xlims[proc])
